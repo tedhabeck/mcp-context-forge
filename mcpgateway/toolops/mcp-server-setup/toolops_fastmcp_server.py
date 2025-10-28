@@ -3,7 +3,7 @@ import json
 from fastmcp import FastMCP
 api_url = "https://api.salesloft.com"
 api_spec_path = "./mcpgateway/toolops/mcp-server-setup/api_specs/Wipro_Salesloft_Get_all_actions_short.json"
-mcp_server_name = "salesloft get all actions"
+mcp_server_name = "salesloft get all actions."
 client = httpx.AsyncClient(base_url=api_url,headers={"Authorization": "Bearer v2_ak_101644_dcdc81eaf282f78ca2a468e09a35a4e9b38e6712709028d80fe28a537ecd0d6d"})
 openapi_spec=json.load(open(api_spec_path,'r'))
 # Create the MCP server
