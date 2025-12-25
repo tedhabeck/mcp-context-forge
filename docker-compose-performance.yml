@@ -157,28 +157,31 @@ services:
       - VALIDATION_MIDDLEWARE_ENABLED=true
       - CORRELATION_ID_ENABLED=false
       - OBSERVABILITY_ENABLED=false
-      # Database pool tuning for load testing (1000 users)
-      # Auth now uses fresh short-lived sessions via asyncio.to_thread(),
-      # so connections are released quickly. Smaller pools work better.
+      # Database pool tuning for load testing
+      # Auth uses fresh short-lived sessions, so smaller pools work better
       # Formula: (replicas × workers) × (pool + overflow) < postgres max_connections
-      # With 4 replicas × 16 workers = 64 async contexts, but sessions are short-lived
-      - DB_POOL_SIZE=50
-      - DB_MAX_OVERFLOW=100
+      # 2 replicas × 16 workers × 30 = 960 connections max
+      - DB_POOL_SIZE=10
+      - DB_MAX_OVERFLOW=20
       - DB_POOL_TIMEOUT=30
       - DB_POOL_RECYCLE=300
       - DB_POOL_PRE_PING=false
+      # Metrics buffer tuning - larger batches, fewer DB writes
+      - METRICS_BUFFER_MAX_SIZE=5000
+      - METRICS_BUFFER_FLUSH_INTERVAL=120
       # Tool invocation timeout - prevents hung connections
       - TOOL_TIMEOUT=30
       - FEDERATION_TIMEOUT=30
       # Worker and server tuning for high-concurrency load testing
-      - GUNICORN_WORKERS=16
+      # Optimal: 2 * CPU cores + 1 = 25 for 12 CPUs
+      - GUNICORN_WORKERS=25
       # Granian high-concurrency tuning (for 1000 concurrent users)
       # Higher backlog allows more pending connections
       - GRANIAN_BACKLOG=8192
       - GRANIAN_BACKPRESSURE=2048
       - GRANIAN_HTTP1_BUFFER_SIZE=524288
       # Granian workers (auto = CPU count, or set explicit number)
-      - GRANIAN_WORKERS=16
+      - GRANIAN_WORKERS=25
 
       # Phoenix Observability Integration (uncomment when using Phoenix)
       # - PHOENIX_ENDPOINT=${PHOENIX_ENDPOINT:-http://phoenix:6006}
@@ -223,10 +226,10 @@ services:
       replicas: 2
       resources:
         limits:
-          cpus: '8'
+          cpus: '12'
           memory: 8G
         reservations:
-          cpus: '4'
+          cpus: '6'
           memory: 4G
 
     # ──────────────────────────────────────────────────────────────────────
@@ -307,7 +310,22 @@ services:
       - "-c"
       - "log_disconnections=on"
       - "-c"
-      - "idle_in_transaction_session_timeout=60s"
+      - "idle_in_transaction_session_timeout=10s"
+      # === PERFORMANCE OPTIMIZATIONS ===
+      - "-c"
+      - "synchronous_commit=off"
+      - "-c"
+      - "commit_delay=100"
+      # === AGGRESSIVE AUTOVACUUM FOR METRICS ===
+      - "-c"
+      - "autovacuum_vacuum_scale_factor=0.02"
+      - "-c"
+      - "autovacuum_naptime=15"
+      # === QUERY MONITORING ===
+      - "-c"
+      - "shared_preload_libraries=pg_stat_statements"
+      - "-c"
+      - "pg_stat_statements.track=all"
     environment:
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=mysecretpassword
@@ -325,10 +343,10 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '4'
+          cpus: '6'
           memory: 4G
         reservations:
-          cpus: '2'
+          cpus: '3'
           memory: 2G
 
   # mariadb:
