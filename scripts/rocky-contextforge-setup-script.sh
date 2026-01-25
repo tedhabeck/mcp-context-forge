@@ -1,12 +1,14 @@
 #!/bin/bash
-# ContextForge Ubuntu Setup Script
-# Author: Mihai Criveti
-# This script sets up a fresh Ubuntu system to run ContextForge with Docker Compose
+# ContextForge Rocky Linux Setup Script
+# Author: Mihai Criveti (Original Ubuntu script)
+# Rocky Linux adaptation
+# This script sets up a fresh Rocky Linux system to run ContextForge with Docker Compose
 #
 # PREREQUISITES (run as root first):
 # ---------------------------------
-#   adduser contextforge
-#   usermod -aG sudo contextforge
+#   useradd -m contextforge
+#   passwd contextforge
+#   usermod -aG wheel contextforge
 #   su - contextforge
 #
 # Then run this script as the contextforge user.
@@ -33,41 +35,42 @@ check_not_root() {
     fi
 }
 
-# Check Ubuntu version
-check_ubuntu() {
+# Check Rocky Linux or RHEL-compatible distro
+check_rocky() {
     if [[ ! -f /etc/os-release ]]; then
-        log_error "Cannot detect OS. This script is designed for Ubuntu."
+        log_error "Cannot detect OS. This script is designed for Rocky Linux and RHEL-compatible distributions."
         exit 1
     fi
     source /etc/os-release
-    if [[ "$ID" != "ubuntu" ]]; then
-        log_warn "This script is designed for Ubuntu. Detected: $ID"
-        if [[ "$YES_MODE" == true ]]; then
-            log_error "Unsupported OS in non-interactive mode. Use -y only on Ubuntu."
-            exit 1
-        fi
-        read -p "Continue anyway? [y/N] " -n 1 -r
-        echo
-        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-            exit 1
-        fi
-    fi
-    log_info "Detected: $PRETTY_NAME"
+    case "$ID" in
+        rocky|rhel|centos|almalinux)
+            log_info "Detected: $PRETTY_NAME"
+            ;;
+        *)
+            log_warn "This script is designed for Rocky Linux and RHEL-compatible distributions. Detected: $ID"
+            if [[ "$YES_MODE" == true ]]; then
+                log_error "Unsupported OS in non-interactive mode. Use -y only on supported distributions."
+                exit 1
+            fi
+            read -p "Continue anyway? [y/N] " -n 1 -r
+            echo
+            if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+                exit 1
+            fi
+            ;;
+    esac
 }
 
 # Install system packages
 install_system_packages() {
-    log_info "Updating package lists..."
-    sudo apt update
-
     log_info "Installing essential packages..."
-    sudo apt install -y \
+    # Use --allowerasing to handle curl-minimal vs curl conflict in minimal images
+    sudo dnf install -y --allowerasing \
         git \
         make \
         curl \
         ca-certificates \
-        gnupg \
-        lsb-release
+        gnupg2
     log_success "System packages installed"
 }
 
@@ -80,19 +83,44 @@ install_docker() {
 
     log_info "Installing Docker..."
 
-    # Add Docker's official GPG key
-    sudo install -m 0755 -d /etc/apt/keyrings
-    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-    sudo chmod a+r /etc/apt/keyrings/docker.gpg
+    # Remove old Docker packages
+    sudo dnf remove -y docker \
+        docker-client \
+        docker-client-latest \
+        docker-common \
+        docker-latest \
+        docker-latest-logrotate \
+        docker-logrotate \
+        docker-engine 2>/dev/null || true
 
-    # Add the repository to apt sources
-    echo \
-        "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
-        $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
-        sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+    # Check if podman/runc are installed and handle removal
+    if rpm -q podman &>/dev/null || rpm -q runc &>/dev/null; then
+        if [[ "$REMOVE_PODMAN" == true ]]; then
+            log_warn "Removing podman and runc (--remove-podman specified)..."
+            sudo dnf remove -y podman runc 2>/dev/null || true
+        else
+            log_warn "podman and/or runc are installed. These conflict with Docker CE."
+            log_warn "Removing them may break existing container workflows."
+            echo
+            read -p "Remove podman and runc to proceed with Docker installation? [y/N] " -n 1 -r
+            echo
+            if [[ $REPLY =~ ^[Yy]$ ]]; then
+                log_info "Removing podman and runc..."
+                sudo dnf remove -y podman runc 2>/dev/null || true
+            else
+                log_error "Cannot install Docker CE while podman/runc are present."
+                log_info "Either remove them manually or re-run with --remove-podman flag."
+                exit 1
+            fi
+        fi
+    fi
 
-    sudo apt update
-    sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+    # Add Docker's official repository
+    sudo dnf -y install dnf-plugins-core
+    sudo dnf config-manager --add-repo https://download.docker.com/linux/rhel/docker-ce.repo
+
+    # Install Docker packages (--allowerasing handles any remaining package conflicts)
+    sudo dnf install -y --allowerasing docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
     log_success "Docker installed: $(docker --version)"
 }
@@ -197,10 +225,98 @@ setup_env() {
     fi
 }
 
+# Run docker command, using sg if user is not yet in docker group
+run_docker_cmd() {
+    if groups | grep -q '\bdocker\b'; then
+        "$@"
+    else
+        # Properly quote arguments for sg -c
+        local cmd=""
+        for arg in "$@"; do
+            cmd+="${cmd:+ }$(printf '%q' "$arg")"
+        done
+        sg docker -c "$cmd"
+    fi
+}
+
+# Check if Docker is logged in to a registry
+check_docker_login() {
+    local config_file="$HOME/.docker/config.json"
+
+    # Check if config file exists and has auth entries
+    if [[ -f "$config_file" ]]; then
+        # Check for auths section with entries, or credsStore/credHelpers configured
+        if grep -qE '"auths"\s*:\s*\{[^}]+\}|"credsStore"|"credHelpers"' "$config_file" 2>/dev/null; then
+            return 0  # Logged in or credential helper configured
+        fi
+    fi
+    return 1  # Not logged in
+}
+
+# Prompt user to log in to Docker registry
+prompt_docker_login() {
+    log_warn "Docker does not appear to be logged in to a registry."
+    log_info "Some container images may require authentication to pull."
+    echo
+    echo "How would you like to authenticate with Docker Hub (or another registry)?"
+    echo
+    echo "  1) Interactive login (recommended) - prompts for username and password"
+    echo "  2) Username with password from stdin - for piped/automated input"
+    echo "  3) Skip login - continue without authenticating"
+    echo
+    read -p "Select an option [1-3]: " -n 1 -r login_choice
+    echo
+
+    case "$login_choice" in
+        1)
+            log_info "Starting interactive Docker login..."
+            read -r -p "Registry URL (press Enter for Docker Hub): " registry_url
+            if [[ -n "$registry_url" ]]; then
+                run_docker_cmd docker login "$registry_url"
+            else
+                run_docker_cmd docker login
+            fi
+            ;;
+        2)
+            read -r -p "Registry URL (press Enter for Docker Hub): " registry_url
+            read -r -p "Username: " docker_username
+            read -r -s -p "Password: " docker_password
+            echo  # newline after hidden password input
+            if [[ -n "$registry_url" ]]; then
+                printf '%s' "$docker_password" | run_docker_cmd docker login -u "$docker_username" --password-stdin "$registry_url"
+            else
+                printf '%s' "$docker_password" | run_docker_cmd docker login -u "$docker_username" --password-stdin
+            fi
+            unset docker_password  # Clear password from memory
+            ;;
+        3)
+            log_warn "Skipping Docker login. Image pulls may fail if authentication is required."
+            ;;
+        *)
+            log_warn "Invalid option. Skipping Docker login."
+            ;;
+    esac
+}
+
+# Ensure Docker login before pulling images
+ensure_docker_login() {
+    if check_docker_login; then
+        log_info "Docker registry credentials detected"
+        return 0
+    fi
+
+    prompt_docker_login
+}
+
 # Start ContextForge with Docker Compose
 start_contextforge() {
     local project_dir="$1"
     cd "$project_dir"
+
+    # Ensure Docker login before attempting to pull images
+    # Note: check_docker_login reads config file (no docker group needed)
+    # but docker login command requires docker group access
+    ensure_docker_login
 
     log_info "Starting ContextForge with Docker Compose..."
 
@@ -276,12 +392,17 @@ print_summary() {
 parse_args() {
     INSTALL_DIR="$HOME/mcp-context-forge"
     SKIP_START=false
+    REMOVE_PODMAN=false
     YES_MODE=false
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --skip-start)
                 SKIP_START=true
+                shift
+                ;;
+            --remove-podman)
+                REMOVE_PODMAN=true
                 shift
                 ;;
             -y|--yes)
@@ -308,14 +429,14 @@ parse_args() {
 # Main function
 main() {
     echo "========================================"
-    echo "  ContextForge Ubuntu Setup Script"
+    echo "  ContextForge Rocky Linux Setup Script"
     echo "========================================"
     echo
 
     parse_args "$@"
 
     check_not_root
-    check_ubuntu
+    check_rocky
     install_system_packages
     install_docker
     start_docker_service
@@ -339,23 +460,25 @@ show_help() {
     echo "Usage: $0 [OPTIONS] [INSTALL_DIR]"
     echo
     echo "Prerequisites (run as root first):"
-    echo "  adduser contextforge"
-    echo "  usermod -aG sudo contextforge"
+    echo "  useradd -m contextforge"
+    echo "  passwd contextforge"
+    echo "  usermod -aG wheel contextforge"
     echo "  su - contextforge"
     echo
     echo "Options:"
-    echo "  --skip-start  Skip starting the services after setup"
-    echo "  -y, --yes     Non-interactive mode (auto-confirm prompts, fail on unsupported OS)"
-    echo "  -h, --help    Show this help message"
+    echo "  --skip-start     Skip starting the services after setup"
+    echo "  --remove-podman  Remove podman/runc without prompting"
+    echo "  -y, --yes        Non-interactive mode (auto-confirm prompts, fail on unsupported OS)"
+    echo "  -h, --help       Show this help message"
     echo
     echo "Arguments:"
-    echo "  INSTALL_DIR   Directory to install ContextForge (default: ~/mcp-context-forge)"
+    echo "  INSTALL_DIR      Directory to install ContextForge (default: ~/mcp-context-forge)"
     echo
     echo "Examples:"
-    echo "  $0                              # Interactive install and start"
-    echo "  $0 --skip-start                 # Install but don't start services"
-    echo "  $0 ~/contextforge               # Install to ~/contextforge and start"
-    echo "  $0 -y --skip-start              # Fully non-interactive install"
+    echo "  $0                                        # Interactive install and start"
+    echo "  $0 --skip-start                           # Install but don't start services"
+    echo "  $0 ~/contextforge                         # Install to ~/contextforge and start"
+    echo "  $0 -y --remove-podman --skip-start        # Fully non-interactive install"
 }
 
 main "$@"
