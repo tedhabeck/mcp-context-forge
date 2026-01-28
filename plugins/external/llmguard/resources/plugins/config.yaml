@@ -11,7 +11,7 @@ plugins:
     priority: 10
     conditions:
       # Apply to specific tools/servers
-      - prompts: ["test_prompt"]
+      - prompts: {"test_prompt"}
         server_ids: []  # Apply to all servers
         tenant_ids: []  # Apply to all tenants
     config:
