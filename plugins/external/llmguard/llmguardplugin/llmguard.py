@@ -90,7 +90,7 @@ class LLMGuardBase:
         self.scanners = {"input": {"sanitizers": [], "filters": []}, "output": {"sanitizers": [], "filters": []}}
         self.__init_scanners()
         self.policy = GuardrailPolicy()
-        
+
         # Initialize result cache with configurable TTL (default 300 seconds = 5 minutes)
         self.cache_ttl = config.get("cache_ttl", 300) if config else 300
         self.cache_enabled = config.get("cache_enabled", True) if config else True
@@ -99,34 +99,34 @@ class LLMGuardBase:
 
     def _compute_content_hash(self, content: str, scan_type: str) -> str:
         """Compute SHA256 hash of content for cache key.
-        
+
         Args:
             content: The content to hash
             scan_type: Type of scan (input/output) to include in hash
-            
+
         Returns:
             Hexadecimal hash string
         """
         hash_input = f"{scan_type}:{content}".encode('utf-8')
         return hashlib.sha256(hash_input).hexdigest()
-    
+
     def _get_cached_result(self, content_hash: str, scan_type: str) -> Optional[Any]:
         """Retrieve cached result if valid.
-        
+
         Args:
             content_hash: Hash of the content
             scan_type: Type of scan for metrics
-            
+
         Returns:
             Cached result if valid, None otherwise
         """
         if not self.cache_enabled:
             return None
-            
+
         if content_hash in self._result_cache:
             result, timestamp = self._result_cache[content_hash]
             age = time.time() - timestamp
-            
+
             if age < self.cache_ttl:
                 logger.debug(f"Cache hit for {scan_type}: {content_hash[:8]}... (age: {age:.2f}s)")
                 llm_guard_cache_hits.labels(scan_type=scan_type).observe(1)
@@ -135,14 +135,14 @@ class LLMGuardBase:
                 # Expired entry
                 logger.debug(f"Cache expired for {scan_type}: {content_hash[:8]}... (age: {age:.2f}s)")
                 del self._result_cache[content_hash]
-        
+
         llm_guard_cache_hits.labels(scan_type=scan_type).observe(0)
         llm_guard_cache_misses_total.labels(scan_type=scan_type).inc()
         return None
-    
+
     def _cache_result(self, content_hash: str, result: Any, scan_type: str) -> None:
         """Store result in cache.
-        
+
         Args:
             content_hash: Hash of the content
             result: Result to cache
@@ -150,25 +150,25 @@ class LLMGuardBase:
         """
         if not self.cache_enabled:
             return
-            
+
         self._result_cache[content_hash] = (result, time.time())
         llm_guard_cache_size.labels(scan_type=scan_type).observe(len(self._result_cache))
         logger.debug(f"Cached result for {scan_type}: {content_hash[:8]}... (cache size: {len(self._result_cache)})")
-    
+
     def _cleanup_expired_cache(self) -> None:
         """Remove expired entries from cache."""
         if not self.cache_enabled:
             return
-            
+
         current_time = time.time()
         expired_keys = [
             key for key, (_, timestamp) in self._result_cache.items()
             if current_time - timestamp >= self.cache_ttl
         ]
-        
+
         for key in expired_keys:
             del self._result_cache[key]
-        
+
         if expired_keys:
             logger.debug(f"Cleaned up {len(expired_keys)} expired cache entries")
 
@@ -346,18 +346,18 @@ class LLMGuardBase:
             self._initialize_output_sanitizers()
 
     def _process_scanner_result(
-        self, 
-        scanner, 
-        scan_result, 
+        self,
+        scanner,
+        scan_result,
         default_prompt: str
     ) -> tuple[str, dict[str, Any]]:
         """Process scanner result, handling exceptions with fail-closed security.
-        
+
         Returns:
             Tuple of (scanner_name, result_dict)
         """
         scanner_name = type(scanner).__name__
-        
+
         if isinstance(scan_result, Exception):
             logger.error(f"Scanner {scanner_name} failed: {scan_result}")
             return scanner_name, {
@@ -365,7 +365,7 @@ class LLMGuardBase:
                 "is_valid": False,
                 "risk_score": 1.0,
             }
-        
+
         sanitized_prompt, is_valid, risk_score = scan_result
         return scanner_name, {
             "sanitized_prompt": sanitized_prompt,
@@ -404,7 +404,7 @@ class LLMGuardBase:
         cached_result = self._get_cached_result(content_hash, "input_filters")
         if cached_result is not None:
             return cached_result
-        
+
         # Cleanup expired cache entries periodically
         self._cleanup_expired_cache()
 
@@ -421,10 +421,10 @@ class LLMGuardBase:
             self._process_scanner_result(scanner, scan_result, input_prompt)
             for scanner, scan_result in zip(self.scanners["input"]["filters"], results)
         )
-        
+
         # Cache the result
         self._cache_result(content_hash, result, "input_filters")
-        
+
         # Record metrics
         duration = time.time() - start_time
         self._record_scan_metrics("input", "filters", duration=duration)
@@ -509,7 +509,7 @@ class LLMGuardBase:
             self._process_scanner_result(scanner, scan_result, model_response)
             for scanner, scan_result in zip(self.scanners["output"]["filters"], results)
         )
-        
+
         # Cache the result
         self._cache_result(content_hash, result, "output_filters")
 
@@ -548,7 +548,7 @@ class LLMGuardBase:
         """
         policy_expression = self.lgconfig.input.filters["policy"] if "policy" in self.lgconfig.input.filters else " and ".join(list(self.lgconfig.input.filters))
         policy_message = self.lgconfig.input.filters["policy_message"] if "policy_message" in self.lgconfig.input.filters else ResponseGuardrailPolicy.DEFAULT_POLICY_DENIAL_RESPONSE.value
-        
+
         if not self.policy.evaluate(policy_expression, result_scan):
             return False, policy_message, result_scan
         return True, ResponseGuardrailPolicy.DEFAULT_POLICY_ALLOW_RESPONSE.value, result_scan

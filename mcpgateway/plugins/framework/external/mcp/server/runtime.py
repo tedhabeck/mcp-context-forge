@@ -309,7 +309,12 @@ class SSLCapableFastMCP(FastMCP):
             return ORJSONResponse({"status": "healthy"})
 
         async def metrics_endpoint(_request: Request):
-            """Prometheus metrics endpoint."""
+            """Prometheus metrics endpoint.
+
+            Returns:
+                JSON response with health status.
+
+            """
             metrics_data = generate_latest(REGISTRY)
             return Response(content=metrics_data, media_type="text/plain; version=0.0.4")
 
@@ -320,7 +325,6 @@ class SSLCapableFastMCP(FastMCP):
                 Response: HTTP 503 response indicating metrics are disabled.
             """
             return Response(content='{"error": "Metrics collection is disabled"}', media_type="application/json", status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
-
 
         routes=[
                 Route("/health", health_check, methods=["GET"]),
@@ -380,7 +384,11 @@ class SSLCapableFastMCP(FastMCP):
         starlette_app.routes.append(Route("/health", health_check, methods=["GET"]))
 
         async def metrics_endpoint(_request: Request):
-            """Prometheus metrics endpoint."""
+            """Prometheus metrics endpoint.
+
+            Returns:
+                text response with metrics detail.
+            """
             metrics_data = generate_latest(REGISTRY)
             return Response(content=metrics_data, media_type="text/plain; version=0.0.4")
 
