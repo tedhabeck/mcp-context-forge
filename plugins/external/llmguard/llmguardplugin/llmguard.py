@@ -20,7 +20,7 @@ from llm_guard import input_scanners, output_scanners, scan_output, scan_prompt
 from llm_guard.output_scanners import Deanonymize
 from llm_guard.util import configure_logger
 from llm_guard.vault import Vault
-from llmguardplugin.policy import get_policy_filters, GuardrailPolicy, ResponseGuardrailPolicy, word_wise_levenshtein_distance
+from llmguardplugin.policy import get_policy_filters, GuardrailPolicy, ResponseGuardrailPolicy
 from llmguardplugin.schema import LLMGuardConfig
 from prometheus_client import Counter, Histogram
 from rapidfuzz.distance import Levenshtein
@@ -107,7 +107,7 @@ class LLMGuardBase:
         Returns:
             Hexadecimal hash string
         """
-        hash_input = f"{scan_type}:{content}".encode('utf-8')
+        hash_input = f"{scan_type}:{content}".encode("utf-8")
         return hashlib.sha256(hash_input).hexdigest()
 
     def _get_cached_result(self, content_hash: str, scan_type: str) -> Optional[Any]:
@@ -161,10 +161,7 @@ class LLMGuardBase:
             return
 
         current_time = time.time()
-        expired_keys = [
-            key for key, (_, timestamp) in self._result_cache.items()
-            if current_time - timestamp >= self.cache_ttl
-        ]
+        expired_keys = [key for key, (_, timestamp) in self._result_cache.items() if current_time - timestamp >= self.cache_ttl]
 
         for key in expired_keys:
             del self._result_cache[key]
@@ -345,12 +342,7 @@ class LLMGuardBase:
         if self.lgconfig.output and self.lgconfig.output.sanitizers:
             self._initialize_output_sanitizers()
 
-    def _process_scanner_result(
-        self,
-        scanner,
-        scan_result,
-        default_prompt: str
-    ) -> tuple[str, dict[str, Any]]:
+    def _process_scanner_result(self, scanner, scan_result, default_prompt: str) -> tuple[str, dict[str, Any]]:
         """Process scanner result, handling exceptions with fail-closed security.
 
         Returns:
@@ -380,7 +372,6 @@ class LLMGuardBase:
             scanner_category=scanner_category,
         ).observe(duration)
 
-
     async def _apply_input_filters(self, input_prompt) -> dict[str, dict[str, Any]]:
         """Takes in input_prompt and applies filters on it in parallel.
 
@@ -409,6 +400,7 @@ class LLMGuardBase:
         self._cleanup_expired_cache()
 
         start_time = time.time()
+
         # Create tasks with optional timeout
         async def scan_input_prompt_with_timeout(scanner):
             coro = asyncio.to_thread(scanner.scan, input_prompt)
@@ -417,10 +409,7 @@ class LLMGuardBase:
         tasks = [scan_input_prompt_with_timeout(scanner) for scanner in self.scanners["input"]["filters"]]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        result = dict(
-            self._process_scanner_result(scanner, scan_result, input_prompt)
-            for scanner, scan_result in zip(self.scanners["input"]["filters"], results)
-        )
+        result = dict(self._process_scanner_result(scanner, scan_result, input_prompt) for scanner, scan_result in zip(self.scanners["input"]["filters"], results))
 
         # Cache the result
         self._cache_result(content_hash, result, "input_filters")
@@ -499,16 +488,12 @@ class LLMGuardBase:
             coro = asyncio.to_thread(scanner.scan, original_input, model_response)
             return await asyncio.wait_for(coro, timeout=30.0)
 
-
         tasks = [scan_output_prompt_with_timeout(scanner) for scanner in self.scanners["output"]["filters"]]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         result = {}
 
-        result = dict(
-            self._process_scanner_result(scanner, scan_result, model_response)
-            for scanner, scan_result in zip(self.scanners["output"]["filters"], results)
-        )
+        result = dict(self._process_scanner_result(scanner, scan_result, model_response) for scanner, scan_result in zip(self.scanners["output"]["filters"], results))
 
         # Cache the result
         self._cache_result(content_hash, result, "output_filters")
@@ -517,6 +502,7 @@ class LLMGuardBase:
         duration = time.time() - start_time
         self._record_scan_metrics("output", "filters", duration=duration)
         return result
+
     async def _apply_output_sanitizers(self, input_prompt, model_response) -> dict[str, dict[str, Any]]:
         """Takes in model_response and applies sanitizers on it.
 
