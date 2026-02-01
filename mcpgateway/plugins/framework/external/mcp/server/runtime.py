@@ -326,9 +326,9 @@ class SSLCapableFastMCP(FastMCP):
             """
             return Response(content='{"error": "Metrics collection is disabled"}', media_type="application/json", status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
 
-        routes=[
-                Route("/health", health_check, methods=["GET"]),
-            ]
+        routes = [
+            Route("/health", health_check, methods=["GET"]),
+        ]
         enable_metrics = os.getenv("ENABLE_METRICS", "true").lower() == "true"
         if enable_metrics:
             routes.append(Route("/metrics/prometheus", metrics_endpoint, methods=["GET"]))
@@ -514,7 +514,7 @@ async def run() -> None:
             await mcp.run_stdio_async()
 
         else:  # http or streamablehttp
-            server_config=SERVER.get_server_config()
+            server_config = SERVER.get_server_config()
             # Create FastMCP server with SSL support
             mcp = SSLCapableFastMCP(
                 server_config,
