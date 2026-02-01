@@ -172,7 +172,7 @@ class LLMGuardBase:
         if expired_keys:
             logger.debug(f"Cleaned up {len(expired_keys)} expired cache entries")
 
-    def _create_new_vault_on_expiry(self, vault) -> bool:
+    async def _create_new_vault_on_expiry(self, vault) -> bool:
         """Takes in vault object, checks it's creation time and checks if it has reached it's expiry time.
         If yes, then new vault object is created and sanitizers are initialized with the new cache object, deleting any earlier references
         to previous vault.
@@ -444,7 +444,7 @@ class LLMGuardBase:
         vault, _, _ = self._retreive_vault()
         logger.info(f"Shriti {vault}")
         # Check for expiry of vault, every time before a sanitizer is applied.
-        vault_update_status = self._create_new_vault_on_expiry(vault)
+        vault_update_status = await self._create_new_vault_on_expiry(vault)
         logger.info(f"Status of vault_update {vault_update_status}")
         result = await asyncio.to_thread(scan_prompt, self.scanners["input"]["sanitizers"], input_prompt)
         if "Anonymize" in result[1]:
