@@ -10,6 +10,7 @@ Authors: Shriti Priya
 
 # Standard
 import asyncio
+import hashlib
 import time
 from datetime import datetime, timedelta
 from typing import Any, Optional
@@ -21,7 +22,7 @@ from llm_guard.util import configure_logger
 from llm_guard.vault import Vault
 from llmguardplugin.policy import get_policy_filters, GuardrailPolicy, ResponseGuardrailPolicy, word_wise_levenshtein_distance
 from llmguardplugin.schema import LLMGuardConfig
-from prometheus_client import Histogram
+from prometheus_client import Counter, Histogram
 from rapidfuzz.distance import Levenshtein
 
 # First-Party
@@ -49,6 +50,27 @@ llm_guard_levenshtein_duration_seconds = Histogram(
 )
 
 
+llm_guard_cache_hits = Histogram(
+    "llm_guard_cache_hits",
+    "Cache hit rate for LLM Guard scans",
+    labelnames=["scan_type"],
+    buckets=(0, 1),
+)
+
+llm_guard_cache_size = Histogram(
+    "llm_guard_cache_size",
+    "Current size of LLM Guard cache",
+    labelnames=["scan_type"],
+    buckets=(0, 10, 50, 100, 500, 1000, 5000, 10000),
+)
+
+llm_guard_cache_misses_total = Counter(
+    "llm_guard_cache_misses_total",
+    "Total number of cache misses",
+    labelnames=["scan_type"],
+)
+
+
 class LLMGuardBase:
     """Base class that leverages LLMGuard library to apply a combination of filters (returns true of false, allowing or denying an input (like PromptInjection)) and sanitizers (transforms the input, like Anonymizer and Deanonymizer) for both input and output prompt.
 
@@ -68,6 +90,87 @@ class LLMGuardBase:
         self.scanners = {"input": {"sanitizers": [], "filters": []}, "output": {"sanitizers": [], "filters": []}}
         self.__init_scanners()
         self.policy = GuardrailPolicy()
+        
+        # Initialize result cache with configurable TTL (default 300 seconds = 5 minutes)
+        self.cache_ttl = config.get("cache_ttl", 300) if config else 300
+        self.cache_enabled = config.get("cache_enabled", True) if config else True
+        self._result_cache: dict[str, tuple[Any, float]] = {}  # {content_hash: (result, timestamp)}
+        logger.info(f"Result cache initialized: enabled={self.cache_enabled}, ttl={self.cache_ttl}s")
+
+    def _compute_content_hash(self, content: str, scan_type: str) -> str:
+        """Compute SHA256 hash of content for cache key.
+        
+        Args:
+            content: The content to hash
+            scan_type: Type of scan (input/output) to include in hash
+            
+        Returns:
+            Hexadecimal hash string
+        """
+        hash_input = f"{scan_type}:{content}".encode('utf-8')
+        return hashlib.sha256(hash_input).hexdigest()
+    
+    def _get_cached_result(self, content_hash: str, scan_type: str) -> Optional[Any]:
+        """Retrieve cached result if valid.
+        
+        Args:
+            content_hash: Hash of the content
+            scan_type: Type of scan for metrics
+            
+        Returns:
+            Cached result if valid, None otherwise
+        """
+        if not self.cache_enabled:
+            return None
+            
+        if content_hash in self._result_cache:
+            result, timestamp = self._result_cache[content_hash]
+            age = time.time() - timestamp
+            
+            if age < self.cache_ttl:
+                logger.debug(f"Cache hit for {scan_type}: {content_hash[:8]}... (age: {age:.2f}s)")
+                llm_guard_cache_hits.labels(scan_type=scan_type).observe(1)
+                return result
+            else:
+                # Expired entry
+                logger.debug(f"Cache expired for {scan_type}: {content_hash[:8]}... (age: {age:.2f}s)")
+                del self._result_cache[content_hash]
+        
+        llm_guard_cache_hits.labels(scan_type=scan_type).observe(0)
+        llm_guard_cache_misses_total.labels(scan_type=scan_type).inc()
+        return None
+    
+    def _cache_result(self, content_hash: str, result: Any, scan_type: str) -> None:
+        """Store result in cache.
+        
+        Args:
+            content_hash: Hash of the content
+            result: Result to cache
+            scan_type: Type of scan for metrics
+        """
+        if not self.cache_enabled:
+            return
+            
+        self._result_cache[content_hash] = (result, time.time())
+        llm_guard_cache_size.labels(scan_type=scan_type).observe(len(self._result_cache))
+        logger.debug(f"Cached result for {scan_type}: {content_hash[:8]}... (cache size: {len(self._result_cache)})")
+    
+    def _cleanup_expired_cache(self) -> None:
+        """Remove expired entries from cache."""
+        if not self.cache_enabled:
+            return
+            
+        current_time = time.time()
+        expired_keys = [
+            key for key, (_, timestamp) in self._result_cache.items()
+            if current_time - timestamp >= self.cache_ttl
+        ]
+        
+        for key in expired_keys:
+            del self._result_cache[key]
+        
+        if expired_keys:
+            logger.debug(f"Cleaned up {len(expired_keys)} expired cache entries")
 
     def _create_new_vault_on_expiry(self, vault) -> bool:
         """Takes in vault object, checks it's creation time and checks if it has reached it's expiry time.
@@ -296,6 +399,15 @@ class LLMGuardBase:
                     "is_valid" which is boolean that says if the prompt is valid or not based on a scanner applied and "risk_score" which gives the risk score assigned by the scanner to the prompt.
         """
 
+        # Check cache first
+        content_hash = self._compute_content_hash(input_prompt, "input_filters")
+        cached_result = self._get_cached_result(content_hash, "input_filters")
+        if cached_result is not None:
+            return cached_result
+        
+        # Cleanup expired cache entries periodically
+        self._cleanup_expired_cache()
+
         start_time = time.time()
         # Create tasks with optional timeout
         async def scan_input_prompt_with_timeout(scanner):
@@ -309,6 +421,10 @@ class LLMGuardBase:
             self._process_scanner_result(scanner, scan_result, input_prompt)
             for scanner, scan_result in zip(self.scanners["input"]["filters"], results)
         )
+        
+        # Cache the result
+        self._cache_result(content_hash, result, "input_filters")
+        
         # Record metrics
         duration = time.time() - start_time
         self._record_scan_metrics("input", "filters", duration=duration)
@@ -369,6 +485,13 @@ class LLMGuardBase:
                     "is_valid" which is boolean that says if the prompt is valid or not based on a scanner applied and "risk_score" which gives the risk score assigned by the scanner to the prompt.
         """
 
+        # Check cache first
+        cache_key = f"{original_input}:{model_response}"
+        content_hash = self._compute_content_hash(cache_key, "output_filters")
+        cached_result = self._get_cached_result(content_hash, "output_filters")
+        if cached_result is not None:
+            return cached_result
+
         start_time = time.time()
 
         # Create tasks with optional timeout
@@ -386,6 +509,9 @@ class LLMGuardBase:
             self._process_scanner_result(scanner, scan_result, model_response)
             for scanner, scan_result in zip(self.scanners["output"]["filters"], results)
         )
+        
+        # Cache the result
+        self._cache_result(content_hash, result, "output_filters")
 
         # Record metrics
         duration = time.time() - start_time
