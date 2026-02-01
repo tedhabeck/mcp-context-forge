@@ -67,6 +67,7 @@ class LLMGuardBase:
         self.lgconfig = LLMGuardConfig.model_validate(config)
         self.scanners = {"input": {"sanitizers": [], "filters": []}, "output": {"sanitizers": [], "filters": []}}
         self.__init_scanners()
+        self.policy = GuardrailPolicy()
 
     def _create_new_vault_on_expiry(self, vault) -> bool:
         """Takes in vault object, checks it's creation time and checks if it has reached it's expiry time.
@@ -421,8 +422,8 @@ class LLMGuardBase:
         """
         policy_expression = self.lgconfig.input.filters["policy"] if "policy" in self.lgconfig.input.filters else " and ".join(list(self.lgconfig.input.filters))
         policy_message = self.lgconfig.input.filters["policy_message"] if "policy_message" in self.lgconfig.input.filters else ResponseGuardrailPolicy.DEFAULT_POLICY_DENIAL_RESPONSE.value
-        policy = GuardrailPolicy()
-        if not policy.evaluate(policy_expression, result_scan):
+        
+        if not self.policy.evaluate(policy_expression, result_scan):
             return False, policy_message, result_scan
         return True, ResponseGuardrailPolicy.DEFAULT_POLICY_ALLOW_RESPONSE.value, result_scan
 
@@ -437,7 +438,6 @@ class LLMGuardBase:
         """
         policy_expression = self.lgconfig.output.filters["policy"] if "policy" in self.lgconfig.output.filters else " and ".join(list(self.lgconfig.output.filters))
         policy_message = self.lgconfig.output.filters["policy_message"] if "policy_message" in self.lgconfig.output.filters else ResponseGuardrailPolicy.DEFAULT_POLICY_DENIAL_RESPONSE.value
-        policy = GuardrailPolicy()
-        if not policy.evaluate(policy_expression, result_scan):
+        if not self.policy.evaluate(policy_expression, result_scan):
             return False, policy_message, result_scan
         return True, ResponseGuardrailPolicy.DEFAULT_POLICY_ALLOW_RESPONSE.value, result_scan
