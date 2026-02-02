@@ -403,6 +403,14 @@ class LLMGuardBase:
 
         # Create tasks with optional timeout
         async def scan_input_prompt_with_timeout(scanner):
+            """
+            This code defines an async helper function that wraps a synchronous scanner operation 
+            to run it in a thread pool with a timeout. It's part of the LLMGuard plugin's input 
+            filtering mechanism that scans prompts for security/safety issues.
+
+            Returns:
+                Any: The result of the scanner operation.
+            """
             coro = asyncio.to_thread(scanner.scan, input_prompt)
             return await asyncio.wait_for(coro, timeout=30.0)
 
@@ -485,6 +493,14 @@ class LLMGuardBase:
 
         # Create tasks with optional timeout
         async def scan_output_prompt_with_timeout(scanner):
+            """
+            This code defines an async helper function that wraps a synchronous scanner operation to
+            run it in a thread pool with a timeout. It's part of the LLMGuard plugin's output scanning
+            mechanism that validates model responses for security/safety issues.
+
+            Returns:
+                Any: The result of the scanner operation.
+            """
             coro = asyncio.to_thread(scanner.scan, original_input, model_response)
             return await asyncio.wait_for(coro, timeout=30.0)
 
