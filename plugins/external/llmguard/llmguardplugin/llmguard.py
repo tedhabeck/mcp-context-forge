@@ -404,8 +404,8 @@ class LLMGuardBase:
         # Create tasks with optional timeout
         async def scan_input_prompt_with_timeout(scanner):
             """
-            This code defines an async helper function that wraps a synchronous scanner operation 
-            to run it in a thread pool with a timeout. It's part of the LLMGuard plugin's input 
+            This code defines an async helper function that wraps a synchronous scanner operation
+            to run it in a thread pool with a timeout. It's part of the LLMGuard plugin's input
             filtering mechanism that scans prompts for security/safety issues.
 
             Returns:
