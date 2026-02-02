@@ -50,6 +50,7 @@ dependencies = [
     "redis>=5.0.0",
     "orjson>=3.10.0",
     "rapidfuzz>=3.14.3",
+    "transformers==4.55.1"
 ]
 
 # URLs
