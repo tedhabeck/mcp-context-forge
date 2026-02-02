@@ -58,9 +58,10 @@ Examples:
 # Standard
 import asyncio
 import logging
+from mcpgateway.plugins.framework.models import MCPServerConfig
 import os
 import sys
-from typing import Any, Dict
+from typing import Any, Dict, Literal
 
 # Third-Party
 from fastapi import Response, status
@@ -514,7 +515,7 @@ async def run() -> None:
             await mcp.run_stdio_async()
 
         else:  # http or streamablehttp
-            server_config = SERVER.get_server_config()
+            server_config: MCPServerConfig = SERVER.get_server_config()
             # Create FastMCP server with SSL support
             mcp = SSLCapableFastMCP(
                 server_config,
@@ -527,9 +528,10 @@ async def run() -> None:
             mcp.tool(name=GET_PLUGIN_CONFIG)(get_plugin_config)
             mcp.tool(name=INVOKE_HOOK)(invoke_hook)
             # set the plugin_info gauge on startup
-            ssl_enabled = "true" if server_config.tls else "false"
+            ssl_enabled: Literal['true', 'false'] = "true" if server_config and server_config.tls is not None else "false"
             PLUGIN_INFO.labels(server_name=MCP_SERVER_NAME, transport="http", ssl_enabled=ssl_enabled).set(1)
-            logger.info(f"Prometheus metrics available at http://{server_config.host}:{server_config.port}/metrics/prometheus")
+            if (server_config):
+                logger.info(f"Prometheus metrics available at http://{server_config.host}:{server_config.port}/metrics/prometheus")
             # Run with streamable-http transport
             logger.info("Starting MCP plugin server with FastMCP (HTTP transport)")
             await mcp.run_streamable_http_async()
