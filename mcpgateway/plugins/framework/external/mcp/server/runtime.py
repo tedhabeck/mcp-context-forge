@@ -527,9 +527,9 @@ async def run() -> None:
             mcp.tool(name=GET_PLUGIN_CONFIG)(get_plugin_config)
             mcp.tool(name=INVOKE_HOOK)(invoke_hook)
             # set the plugin_info gauge on startup
-            ssl_enabled: Literal['true', 'false'] = "true" if server_config and server_config.tls is not None else "false"
+            ssl_enabled: Literal["true", "false"] = "true" if server_config and server_config.tls is not None else "false"
             PLUGIN_INFO.labels(server_name=MCP_SERVER_NAME, transport="http", ssl_enabled=ssl_enabled).set(1)
-            if (server_config):
+            if server_config:
                 logger.info(f"Prometheus metrics available at http://{server_config.host}:{server_config.port}/metrics/prometheus")
             # Run with streamable-http transport
             logger.info("Starting MCP plugin server with FastMCP (HTTP transport)")
