@@ -58,7 +58,6 @@ Examples:
 # Standard
 import asyncio
 import logging
-from mcpgateway.plugins.framework.models import MCPServerConfig
 import os
 import sys
 from typing import Any, Dict, Literal
