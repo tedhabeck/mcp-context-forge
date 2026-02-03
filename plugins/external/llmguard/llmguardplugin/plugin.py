@@ -173,14 +173,14 @@ class LLMGuardPlugin(Plugin):
             Tuple of (should_continue, violation_if_any).
         """
         filters_context = {"input": {"filters": []}}
-        logger.info(f"Applying input guardrail filters on {prompt_text}")
+        logger.debug("Applying input guardrail filters on %s", prompt_text)
 
         result = await self.llmguard_instance._apply_input_filters(prompt_text)
         filters_context["input"]["filters"].append(result)
-        logger.info(f"Result of input guardrail filters: {result}")
+        logger.debug("Result of input guardrail filters: %s", result)
 
         decision = self.llmguard_instance._apply_policy_input(result)
-        logger.info(f"Result of policy decision: {decision}")
+        logger.debug("Result of policy decision: %s", decision)
 
         if self.lgconfig.set_guardrails_context:
             self.__update_context(context, "context", filters_context)
@@ -202,18 +202,18 @@ class LLMGuardPlugin(Plugin):
             Tuple of (should_continue, sanitized_text, violation_if_any).
         """
         sanitizers_context = {"input": {"sanitizers": []}}
-        logger.info(f"Applying input guardrail sanitizers on {prompt_text}")
+        logger.debug("Applying input guardrail sanitizers on %s", prompt_text)
 
         result = await self.llmguard_instance._apply_input_sanitizers(prompt_text)
         sanitizers_context["input"]["sanitizers"].append(result)
-        logger.info(f"Result of input guardrail sanitizers on {result}")
+        logger.debug("Result of input guardrail sanitizers on %s", result)
 
         if self.lgconfig.set_guardrails_context:
             self.__update_context(context, "context", sanitizers_context)
 
         if not result:
             violation = self._create_sanitizer_violation()
-            logger.info(f"violation {violation}")
+            logger.info("violation %s", violation)
             return False, None, violation
 
         # Handle vault caching
@@ -264,7 +264,7 @@ class LLMGuardPlugin(Plugin):
             Tuple of (should_continue, sanitized_text).
         """
         sanitizers_context = {"output": {"sanitizers": []}}
-        logger.info(f"Applying output sanitizers on {text}")
+        logger.debug("Applying output sanitizers on %s", text)
 
         # Update sanitizer config with vault data if available
         if vault_id:
@@ -278,7 +278,7 @@ class LLMGuardPlugin(Plugin):
         if self.lgconfig.set_guardrails_context:
             self.__update_context(context, "context", sanitizers_context)
 
-        logger.info(f"Result of output sanitizers: {result}")
+        logger.debug("Result of output sanitizers:  %s", result)
         return True, result[0]
 
     async def _process_output_filters(self, original_prompt: str, text: str, context: PluginContext) -> tuple[bool, PluginViolation | None]:
@@ -293,19 +293,20 @@ class LLMGuardPlugin(Plugin):
             Tuple of (should_continue, violation_if_any).
         """
         filters_context = {"output": {"filters": []}}
-        logger.info(f"Applying output guardrails on {text}")
+        logger.debug("Applying output guardrails on %s", text)
 
         result = await self.llmguard_instance._apply_output_filters(original_prompt, text)
         filters_context["output"]["filters"].append(result)
 
         decision = self.llmguard_instance._apply_policy_output(result)
-        logger.info(f"Policy decision on output guardrails: {decision}")
+        logger.debug("Policy decision on output guardrails: %s", decision)
 
         if self.lgconfig.set_guardrails_context:
             self.__update_context(context, "context", filters_context)
 
         if not decision[0]:
             violation = self._create_filter_violation(decision)
+            logger.info("violation %s", violation)
             return False, violation
 
         return True, None
@@ -320,7 +321,7 @@ class LLMGuardPlugin(Plugin):
         Returns:
             The result of the plugin's analysis, including whether the prompt can proceed.
         """
-        logger.info(f"Processing payload {payload}")
+        logger.debug("Processing payload %s", payload)
 
         # Early return if no args to process
         if not payload.args:
@@ -357,7 +358,7 @@ class LLMGuardPlugin(Plugin):
         Returns:
             The result of the plugin's analysis, including whether the prompt can proceed.
         """
-        logger.info(f"Processing result {payload.result}")
+        logger.info("Processing result %s", payload.result)
         if not payload.result.messages:
             return PromptPosthookResult()
 
