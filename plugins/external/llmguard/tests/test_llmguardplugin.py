@@ -1107,6 +1107,7 @@ async def test_process_scanner_result_with_exception():
 
     # Create a mock scanner
     class MockScanner:
+        """Mock scanner class for testing."""
         pass
 
     scanner = MockScanner()
