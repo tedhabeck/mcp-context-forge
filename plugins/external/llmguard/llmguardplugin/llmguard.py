@@ -95,7 +95,57 @@ class LLMGuardBase:
         self.cache_ttl = config.get("cache_ttl", 300) if config else 300
         self.cache_enabled = config.get("cache_enabled", True) if config else True
         self._result_cache: dict[str, tuple[Any, float]] = {}  # {content_hash: (result, timestamp)}
-        logger.info("Result cache initialized: enabled=%s, ttl=%ss", self.cache_enabled, self.cache_ttl)
+        self._cleanup_task: Optional[asyncio.Task] = None
+        self._shutdown_event = asyncio.Event()
+        logger.info(f"Result cache initialized: enabled={self.cache_enabled}, ttl={self.cache_ttl}s")
+        
+        # Start background cache cleanup task
+        if self.cache_enabled:
+            self._cleanup_task = asyncio.create_task(self._background_cache_cleanup())
+            logger.info("Background cache cleanup task started")
+
+    async def _background_cache_cleanup(self) -> None:
+        """Background task that periodically cleans up expired cache entries.
+        
+        Runs every cache_ttl/2 seconds to ensure timely cleanup without
+        blocking the main request flow.
+        """
+        cleanup_interval = max(self.cache_ttl / 2, 30)  # At least every 30 seconds
+        logger.info(f"Background cache cleanup running every {cleanup_interval}s")
+        
+        while not self._shutdown_event.is_set():
+            try:
+                # Wait for cleanup interval or shutdown signal
+                await asyncio.wait_for(
+                    self._shutdown_event.wait(),
+                    timeout=cleanup_interval
+                )
+                # If we get here, shutdown was signaled
+                break
+            except asyncio.TimeoutError:
+                # Timeout is expected - time to clean up
+                if self.cache_enabled:
+                    self._cleanup_expired_cache()
+        
+        logger.info("Background cache cleanup task stopped")
+    
+    async def shutdown(self) -> None:
+        """Shutdown the LLMGuard instance and cleanup resources."""
+        logger.info("Shutting down LLMGuard instance")
+        self._shutdown_event.set()
+        
+        if self._cleanup_task and not self._cleanup_task.done():
+            try:
+                await asyncio.wait_for(self._cleanup_task, timeout=5.0)
+            except asyncio.TimeoutError:
+                logger.warning("Cache cleanup task did not finish in time, cancelling")
+                self._cleanup_task.cancel()
+                try:
+                    await self._cleanup_task
+                except asyncio.CancelledError:
+                    pass
+        
+        logger.info("LLMGuard instance shutdown complete")
 
     def _compute_content_hash(self, content: str, scan_type: str) -> str:
         """Compute SHA256 hash of content for cache key.
@@ -395,9 +445,6 @@ class LLMGuardBase:
         cached_result = self._get_cached_result(content_hash, "input_filters")
         if cached_result is not None:
             return cached_result
-
-        # Cleanup expired cache entries periodically
-        self._cleanup_expired_cache()
 
         start_time = time.time()
 
