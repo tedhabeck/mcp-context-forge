@@ -250,7 +250,7 @@ class LLMGuardBase:
         logger.info("Vault creation time %s", vault.creation_time)
         return vault
 
-    def _retreive_vault(self, sanitizer_names: list = ["Anonymize"]) -> tuple[Vault, int, tuple]:
+    def _retreive_vault(self, sanitizer_names: list = ["Anonymize"]) -> tuple[Vault | None, int | None, tuple | None]:
         """This function is responsible for retrieving vault for given sanitizer names
 
         Args:
@@ -262,6 +262,8 @@ class LLMGuardBase:
         vault_id = None
         vault_tuples = None
         length = len(self.scanners["input"]["sanitizers"])
+        if length == 0:
+            return None, vault_id, vault_tuples
         for i in range(length):
             scanner_name = type(self.scanners["input"]["sanitizers"][i]).__name__
             if scanner_name in sanitizer_names:
@@ -471,7 +473,7 @@ class LLMGuardBase:
         self._record_scan_metrics("input", "filters", duration=duration)
         return result
 
-    async def _apply_input_sanitizers(self, input_prompt) -> dict[str, dict[str, Any]]:
+    async def _apply_input_sanitizers(self, input_prompt) -> dict[str, dict[str, Any]] | None:
         """Takes in input_prompt and applies sanitizers on it.
 
         Args:
@@ -483,7 +485,8 @@ class LLMGuardBase:
         """
         start_time = time.time()
         vault, _, _ = self._retreive_vault()
-        logger.info("Shriti %s", vault)
+        if vault is None:
+            return None
         # Check for expiry of vault, every time before a sanitizer is applied.
         vault_update_status = await self._create_new_vault_on_expiry(vault)
         logger.info("Status of vault_update %s", vault_update_status)
