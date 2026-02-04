@@ -72,7 +72,7 @@ class LLMGuardPlugin(Plugin):
         """
         return self.lgconfig.input or self.lgconfig.output
 
-    def __update_context(self, context, key, value) -> dict:
+    def __update_context(self, context, key, value):
         """Update Context implementation.
 
         Args:
