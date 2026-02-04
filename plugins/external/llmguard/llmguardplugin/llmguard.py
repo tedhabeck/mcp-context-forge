@@ -98,7 +98,7 @@ class LLMGuardBase:
         self._cleanup_task: Optional[asyncio.Task] = None
         self._shutdown_event = asyncio.Event()
         logger.info(f"Result cache initialized: enabled={self.cache_enabled}, ttl={self.cache_ttl}s")
-        
+
         # Start background cache cleanup task
         if self.cache_enabled:
             self._cleanup_task = asyncio.create_task(self._background_cache_cleanup())
@@ -106,34 +106,31 @@ class LLMGuardBase:
 
     async def _background_cache_cleanup(self) -> None:
         """Background task that periodically cleans up expired cache entries.
-        
+
         Runs every cache_ttl/2 seconds to ensure timely cleanup without
         blocking the main request flow.
         """
         cleanup_interval = max(self.cache_ttl / 2, 30)  # At least every 30 seconds
         logger.info(f"Background cache cleanup running every {cleanup_interval}s")
-        
+
         while not self._shutdown_event.is_set():
             try:
                 # Wait for cleanup interval or shutdown signal
-                await asyncio.wait_for(
-                    self._shutdown_event.wait(),
-                    timeout=cleanup_interval
-                )
+                await asyncio.wait_for(self._shutdown_event.wait(), timeout=cleanup_interval)
                 # If we get here, shutdown was signaled
                 break
             except asyncio.TimeoutError:
                 # Timeout is expected - time to clean up
                 if self.cache_enabled:
                     self._cleanup_expired_cache()
-        
+
         logger.info("Background cache cleanup task stopped")
-    
+
     async def shutdown(self) -> None:
         """Shutdown the LLMGuard instance and cleanup resources."""
         logger.info("Shutting down LLMGuard instance")
         self._shutdown_event.set()
-        
+
         if self._cleanup_task and not self._cleanup_task.done():
             try:
                 await asyncio.wait_for(self._cleanup_task, timeout=5.0)
@@ -144,7 +141,7 @@ class LLMGuardBase:
                     await self._cleanup_task
                 except asyncio.CancelledError:
                     pass
-        
+
         logger.info("LLMGuard instance shutdown complete")
 
     def _compute_content_hash(self, content: str, scan_type: str) -> str:
