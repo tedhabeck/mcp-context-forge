@@ -56,16 +56,16 @@ class TestUpdateCache:
         """Test successful cache update."""
         key = "test_key"
         value = [("original", "PERSON", "placeholder")]
-        
+
         # Mock pipeline
         mock_pipe = AsyncMock()
         mock_pipe.execute = AsyncMock(return_value=[True, True])
         cache.cache.pipeline = MagicMock(return_value=mock_pipe)
         mock_pipe.__aenter__ = AsyncMock(return_value=mock_pipe)
         mock_pipe.__aexit__ = AsyncMock(return_value=None)
-        
+
         success_set, success_expiry = await cache.update_cache(key, value)
-        
+
         assert success_set is True
         assert success_expiry is True
         mock_pipe.set.assert_called_once()
@@ -77,9 +77,9 @@ class TestUpdateCache:
         key = "test_key"
         # Create a non-serializable object
         value = [object()]
-        
+
         success_set, success_expiry = await cache.update_cache(key, value)
-        
+
         assert success_set is False
         assert success_expiry is False
 
@@ -88,16 +88,16 @@ class TestUpdateCache:
         """Test cache update when set operation fails."""
         key = "test_key"
         value = [("original", "PERSON", "placeholder")]
-        
+
         # Mock pipeline with set failure
         mock_pipe = AsyncMock()
         mock_pipe.execute = AsyncMock(return_value=[False, True])
         cache.cache.pipeline = MagicMock(return_value=mock_pipe)
         mock_pipe.__aenter__ = AsyncMock(return_value=mock_pipe)
         mock_pipe.__aexit__ = AsyncMock(return_value=None)
-        
+
         success_set, success_expiry = await cache.update_cache(key, value)
-        
+
         assert success_set is False
         assert success_expiry is True
 
@@ -106,16 +106,16 @@ class TestUpdateCache:
         """Test cache update when expiry operation fails."""
         key = "test_key"
         value = [("original", "PERSON", "placeholder")]
-        
+
         # Mock pipeline with expiry failure
         mock_pipe = AsyncMock()
         mock_pipe.execute = AsyncMock(return_value=[True, False])
         cache.cache.pipeline = MagicMock(return_value=mock_pipe)
         mock_pipe.__aenter__ = AsyncMock(return_value=mock_pipe)
         mock_pipe.__aexit__ = AsyncMock(return_value=None)
-        
+
         success_set, success_expiry = await cache.update_cache(key, value)
-        
+
         assert success_set is True
         assert success_expiry is False
 
@@ -129,11 +129,11 @@ class TestRetrieveCache:
         key = "test_key"
         value = [["original", "PERSON", "placeholder"]]
         serialized = orjson.dumps(value)
-        
+
         cache.cache.get = AsyncMock(return_value=serialized)
-        
+
         result = await cache.retrieve_cache(key)
-        
+
         assert result == [("original", "PERSON", "placeholder")]
         cache.cache.get.assert_called_once_with(key)
 
@@ -141,11 +141,11 @@ class TestRetrieveCache:
     async def test_retrieve_cache_miss(self, cache):
         """Test cache miss."""
         key = "test_key"
-        
+
         cache.cache.get = AsyncMock(return_value=None)
-        
+
         result = await cache.retrieve_cache(key)
-        
+
         assert result is None
         cache.cache.get.assert_called_once_with(key)
 
@@ -153,12 +153,12 @@ class TestRetrieveCache:
     async def test_retrieve_cache_invalid_json(self, cache):
         """Test cache retrieval with invalid JSON."""
         key = "test_key"
-        
+
         cache.cache.get = AsyncMock(return_value=b"invalid json{")
         cache.cache.delete = AsyncMock()
-        
+
         result = await cache.retrieve_cache(key)
-        
+
         assert result is None
         cache.cache.delete.assert_called_once_with(key)
 
@@ -168,12 +168,12 @@ class TestRetrieveCache:
         key = "test_key"
         value = "not a list"
         serialized = orjson.dumps(value)
-        
+
         cache.cache.get = AsyncMock(return_value=serialized)
         cache.cache.delete = AsyncMock()
-        
+
         result = await cache.retrieve_cache(key)
-        
+
         assert result is None
         cache.cache.delete.assert_called_once_with(key)
 
@@ -183,11 +183,11 @@ class TestRetrieveCache:
         key = "test_key"
         value = [["item1", "item2"], ["item3", "item4"]]
         serialized = orjson.dumps(value)
-        
+
         cache.cache.get = AsyncMock(return_value=serialized)
-        
+
         result = await cache.retrieve_cache(key)
-        
+
         assert result == [("item1", "item2"), ("item3", "item4")]
 
 
@@ -223,12 +223,12 @@ class TestDeleteCache:
     async def test_delete_cache_success(self, cache):
         """Test successful cache deletion."""
         key = "test_key"
-        
+
         cache.cache.delete = AsyncMock(return_value=1)
         cache.cache.exists = AsyncMock(return_value=0)
-        
+
         await cache.delete_cache(key)
-        
+
         cache.cache.delete.assert_called_once_with(key)
         cache.cache.exists.assert_called_once_with(key)
 
@@ -236,12 +236,12 @@ class TestDeleteCache:
     async def test_delete_cache_not_found(self, cache):
         """Test cache deletion when key doesn't exist."""
         key = "test_key"
-        
+
         cache.cache.delete = AsyncMock(return_value=0)
         cache.cache.exists = AsyncMock(return_value=0)
-        
+
         await cache.delete_cache(key)
-        
+
         cache.cache.delete.assert_called_once_with(key)
         cache.cache.exists.assert_called_once_with(key)
 
@@ -249,13 +249,14 @@ class TestDeleteCache:
     async def test_delete_cache_still_exists(self, cache):
         """Test cache deletion when key still exists after deletion."""
         key = "test_key"
-        
+
         cache.cache.delete = AsyncMock(return_value=1)
         cache.cache.exists = AsyncMock(return_value=1)
-        
+
         await cache.delete_cache(key)
-        
+
         cache.cache.delete.assert_called_once_with(key)
         cache.cache.exists.assert_called_once_with(key)
+
 
 # Made with Bob

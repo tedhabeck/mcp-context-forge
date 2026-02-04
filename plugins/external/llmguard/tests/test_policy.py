@@ -164,7 +164,6 @@ class TestGuardrailPolicyEdgeCases:
         assert result is False
 
 
-
 class TestGuardrailPolicyArithmetic:
     """Tests for arithmetic operations."""
 
@@ -367,12 +366,7 @@ class TestGetPolicyFilters:
 
     def test_dict_policy_with_both_special_keys(self):
         """Dict policy with both special keys should exclude them."""
-        filters = get_policy_filters({
-            "PromptInjection": True,
-            "Toxicity": False,
-            "policy": "expression",
-            "policy_message": "message"
-        })
+        filters = get_policy_filters({"PromptInjection": True, "Toxicity": False, "policy": "expression", "policy_message": "message"})
         assert set(filters) == {"PromptInjection", "Toxicity"}
 
     def test_none_policy(self):
@@ -405,7 +399,6 @@ class TestGuardrailPolicyUnsupportedOperations:
         assert result == "Invalid expression"
 
 
-
 class TestGuardrailPolicyASTExpression:
     """Tests for AST Expression node handling."""
 
@@ -413,6 +406,7 @@ class TestGuardrailPolicyASTExpression:
         """Test that ast.Expression wrapper nodes are handled correctly."""
         # This tests the isinstance(node, ast.Expression) branch at line 76-77
         import ast
+
         # Create an Expression node explicitly and pass the whole tree (not just body)
         tree = ast.parse("True", mode="eval")
         # Call _safe_eval_impl directly with the Expression node
