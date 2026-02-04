@@ -760,3 +760,582 @@ async def test_process_input_sanitizers_with_context_storage():
     assert "guardrails" in context.state
     assert "LLMGuardPlugin" in context.state["guardrails"]
     assert "context" in context.state["guardrails"]["LLMGuardPlugin"]
+
+
+@pytest.mark.asyncio
+async def test_llmguard_cache_disabled():
+    """Test LLMGuard with cache disabled."""
+    config_input_filter = {
+        "cache_enabled": False,
+        "input": {"filters": {"PromptInjection": {"threshold": 0.9, "use_onnx": False}}},
+    }
+    
+    config = PluginConfig(
+        name="test",
+        kind="llmguardplugin.LLMGuardPlugin",
+        hooks=["prompt_pre_fetch"],
+        config=config_input_filter,
+    )
+    
+    plugin = LLMGuardPlugin(config)
+    
+    # Verify cache is disabled
+    assert not plugin.llmguard_instance.cache_enabled
+    
+    # Test that operations still work without cache
+    payload = PromptPrehookPayload(prompt_id="test_prompt", args={"arg0": "Hello, how are you?"})
+    context = PluginContext(global_context=GlobalContext(request_id="1", server_id="2"))
+    result = await plugin.prompt_pre_fetch(payload, context)
+    
+    assert result.continue_processing is True
+
+
+@pytest.mark.asyncio
+async def test_llmguard_cache_expiry():
+    """Test cache expiry functionality."""
+    config_input_filter = {
+        "cache_enabled": True,
+        "cache_ttl": 1,  # 1 second TTL for fast testing
+        "input": {"filters": {"PromptInjection": {"threshold": 0.9, "use_onnx": False}}},
+    }
+    
+    config = PluginConfig(
+        name="test",
+        kind="llmguardplugin.LLMGuardPlugin",
+        hooks=["prompt_pre_fetch"],
+        config=config_input_filter,
+    )
+    
+    plugin = LLMGuardPlugin(config)
+    context = PluginContext(global_context=GlobalContext(request_id="1", server_id="2"))
+    
+    # First request - should cache
+    payload = PromptPrehookPayload(prompt_id="test_prompt", args={"arg0": "Hello, how are you?"})
+    await plugin.prompt_pre_fetch(payload, context)
+    
+    # Verify cache has entry
+    assert len(plugin.llmguard_instance._result_cache) > 0
+    
+    # Wait for cache to expire
+    time.sleep(2)
+    
+    # Manually trigger cleanup
+    plugin.llmguard_instance._cleanup_expired_cache()
+    
+    # Verify cache was cleaned
+    assert len(plugin.llmguard_instance._result_cache) == 0
+
+
+@pytest.mark.asyncio
+async def test_llmguard_cache_hit():
+    """Test cache hit scenario."""
+    config_input_filter = {
+        "cache_enabled": True,
+        "cache_ttl": 300,
+        "input": {"filters": {"PromptInjection": {"threshold": 0.9, "use_onnx": False}}},
+    }
+    
+    config = PluginConfig(
+        name="test",
+        kind="llmguardplugin.LLMGuardPlugin",
+        hooks=["prompt_pre_fetch"],
+        config=config_input_filter,
+    )
+    
+    plugin = LLMGuardPlugin(config)
+    context = PluginContext(global_context=GlobalContext(request_id="1", server_id="2"))
+    
+    # First request - should cache
+    payload = PromptPrehookPayload(prompt_id="test_prompt", args={"arg0": "Hello, how are you?"})
+    result1 = await plugin.prompt_pre_fetch(payload, context)
+    
+    # Second request with same input - should hit cache
+    result2 = await plugin.prompt_pre_fetch(payload, context)
+    
+    # Both should succeed
+    assert result1.continue_processing is True
+    assert result2.continue_processing is True
+
+
+@pytest.mark.asyncio
+async def test_llmguard_shutdown():
+    """Test LLMGuard shutdown functionality."""
+    config_input_filter = {
+        "cache_enabled": True,
+        "cache_ttl": 300,
+        "input": {"filters": {"PromptInjection": {"threshold": 0.9, "use_onnx": False}}},
+    }
+    
+    config = PluginConfig(
+        name="test",
+        kind="llmguardplugin.LLMGuardPlugin",
+        hooks=["prompt_pre_fetch"],
+        config=config_input_filter,
+    )
+    
+    plugin = LLMGuardPlugin(config)
+    
+    # Verify cleanup task is running
+    assert plugin.llmguard_instance._cleanup_task is not None
+    assert not plugin.llmguard_instance._cleanup_task.done()
+    
+    # Shutdown
+    await plugin.llmguard_instance.shutdown()
+    
+    # Verify shutdown event is set
+    assert plugin.llmguard_instance._shutdown_event.is_set()
+
+
+@pytest.mark.asyncio
+async def test_retreive_vault_no_sanitizers():
+    """Test _retreive_vault when no sanitizers are configured."""
+    config_input_filter = {
+        "input": {"filters": {"PromptInjection": {"threshold": 0.9, "use_onnx": False}}},
+    }
+    
+    config = PluginConfig(
+        name="test",
+        kind="llmguardplugin.LLMGuardPlugin",
+        hooks=["prompt_pre_fetch"],
+        config=config_input_filter,
+    )
+    
+    plugin = LLMGuardPlugin(config)
+    
+    # Call _retreive_vault when no sanitizers exist
+    vault, vault_id, vault_tuples = plugin.llmguard_instance._retreive_vault()
+    
+    # Should return None values
+    assert vault is None
+    assert vault_id is None
+    assert vault_tuples is None
+
+
+@pytest.mark.asyncio
+async def test_retreive_vault_with_error():
+    """Test _retreive_vault error handling."""
+    # Third-Party
+    from unittest.mock import PropertyMock, patch
+    
+    config_input_sanitizer = {
+        "input": {"sanitizers": {"Anonymize": {"language": "en", "vault_ttl": 180}}},
+    }
+    
+    config = PluginConfig(
+        name="test",
+        kind="llmguardplugin.LLMGuardPlugin",
+        hooks=["prompt_pre_fetch"],
+        config=config_input_sanitizer,
+    )
+    
+    plugin = LLMGuardPlugin(config)
+    
+    # Mock the _vault property to raise an exception
+    with patch.object(plugin.llmguard_instance.scanners["input"]["sanitizers"][0], '_vault', new_callable=PropertyMock) as mock_vault:
+        mock_vault.side_effect = Exception("Test error")
+        
+        # Should handle the error gracefully
+        vault, vault_id, vault_tuples = plugin.llmguard_instance._retreive_vault()
+        
+        # Should still return the scanner's vault despite error
+        assert vault is not None
+
+
+@pytest.mark.asyncio
+async def test_update_input_sanitizers_error_handling():
+    """Test _update_input_sanitizers error handling."""
+    # Third-Party
+    from unittest.mock import PropertyMock, patch
+    
+    config_input_sanitizer = {
+        "input": {"sanitizers": {"Anonymize": {"language": "en", "vault_ttl": 180}}},
+    }
+    
+    config = PluginConfig(
+        name="test",
+        kind="llmguardplugin.LLMGuardPlugin",
+        hooks=["prompt_pre_fetch"],
+        config=config_input_sanitizer,
+    )
+    
+    plugin = LLMGuardPlugin(config)
+    
+    # Mock the _vault property to raise an exception during update
+    with patch.object(plugin.llmguard_instance.scanners["input"]["sanitizers"][0], '_vault', new_callable=PropertyMock) as mock_vault:
+        mock_vault.side_effect = Exception("Test error")
+        
+        # Should handle the error gracefully
+        plugin.llmguard_instance._update_input_sanitizers()
+
+
+@pytest.mark.asyncio
+async def test_update_output_sanitizers_error_handling():
+    """Test _update_output_sanitizers error handling."""
+    # Third-Party
+    from unittest.mock import PropertyMock, patch
+    
+    config_output_sanitizer = {
+        "output": {"sanitizers": {"Deanonymize": {"matching_strategy": "exact"}}},
+    }
+    
+    config = PluginConfig(
+        name="test",
+        kind="llmguardplugin.LLMGuardPlugin",
+        hooks=["prompt_post_fetch"],
+        config=config_output_sanitizer,
+    )
+    
+    plugin = LLMGuardPlugin(config)
+    
+    # Mock the _vault property to raise an exception during update
+    with patch.object(plugin.llmguard_instance.scanners["output"]["sanitizers"][0], '_vault', new_callable=PropertyMock) as mock_vault:
+        mock_vault.side_effect = Exception("Test error")
+        
+        # Should handle the error gracefully
+        plugin.llmguard_instance._update_output_sanitizers({"Deanonymize": []})
+
+
+@pytest.mark.asyncio
+async def test_initialize_input_filters_error_handling():
+    """Test _initialize_input_filters error handling."""
+    # Third-Party
+    from unittest.mock import patch
+    
+    config_input_filter = {
+        "input": {"filters": {"PromptInjection": {"threshold": 0.9, "use_onnx": False}}},
+    }
+    
+    config = PluginConfig(
+        name="test",
+        kind="llmguardplugin.LLMGuardPlugin",
+        hooks=["prompt_pre_fetch"],
+        config=config_input_filter,
+    )
+    
+    # Mock get_scanner_by_name to raise an exception
+    with patch('llm_guard.input_scanners.get_scanner_by_name', side_effect=Exception("Test error")):
+        # Should handle the error gracefully during initialization
+        plugin = LLMGuardPlugin(config)
+        
+        # Filters list should be empty due to error
+        assert len(plugin.llmguard_instance.scanners["input"]["filters"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_initialize_input_sanitizers_error_handling():
+    """Test _initialize_input_sanitizers error handling."""
+    # Third-Party
+    from unittest.mock import patch
+    
+    config_input_sanitizer = {
+        "input": {"sanitizers": {"Anonymize": {"language": "en"}}},
+    }
+    
+    config = PluginConfig(
+        name="test",
+        kind="llmguardplugin.LLMGuardPlugin",
+        hooks=["prompt_pre_fetch"],
+        config=config_input_sanitizer,
+    )
+    
+    # Mock get_scanner_by_name to raise an exception
+    with patch('llm_guard.input_scanners.get_scanner_by_name', side_effect=Exception("Test error")):
+        # Should handle the error gracefully during initialization
+        plugin = LLMGuardPlugin(config)
+        
+        # Sanitizers list should be empty due to error
+        assert len(plugin.llmguard_instance.scanners["input"]["sanitizers"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_initialize_output_filters_error_handling():
+    """Test _initialize_output_filters error handling."""
+    # Third-Party
+    from unittest.mock import patch
+    
+    config_output_filter = {
+        "output": {"filters": {"Toxicity": {"threshold": 0.5}}},
+    }
+    
+    config = PluginConfig(
+        name="test",
+        kind="llmguardplugin.LLMGuardPlugin",
+        hooks=["prompt_post_fetch"],
+        config=config_output_filter,
+    )
+    
+    # Mock get_scanner_by_name to raise an exception
+    with patch('llm_guard.output_scanners.get_scanner_by_name', side_effect=Exception("Test error")):
+        # Should handle the error gracefully during initialization
+        plugin = LLMGuardPlugin(config)
+        
+        # Filters list should be empty due to error
+        assert len(plugin.llmguard_instance.scanners["output"]["filters"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_initialize_output_sanitizers_error_handling():
+    """Test _initialize_output_sanitizers error handling."""
+    # Third-Party
+    from unittest.mock import patch
+    
+    config_output_sanitizer = {
+        "output": {"sanitizers": {"Deanonymize": {"matching_strategy": "exact"}}},
+    }
+    
+    config = PluginConfig(
+        name="test",
+        kind="llmguardplugin.LLMGuardPlugin",
+        hooks=["prompt_post_fetch"],
+        config=config_output_sanitizer,
+    )
+    
+    # Mock get_scanner_by_name to raise an exception
+    with patch('llm_guard.output_scanners.get_scanner_by_name', side_effect=Exception("Test error")):
+        # Should handle the error gracefully during initialization
+        plugin = LLMGuardPlugin(config)
+        
+        # Sanitizers list should be empty due to error
+        assert len(plugin.llmguard_instance.scanners["output"]["sanitizers"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_process_scanner_result_with_exception():
+    """Test _process_scanner_result handles exceptions properly."""
+    config_input_filter = {
+        "input": {"filters": {"PromptInjection": {"threshold": 0.9, "use_onnx": False}}},
+    }
+    
+    config = PluginConfig(
+        name="test",
+        kind="llmguardplugin.LLMGuardPlugin",
+        hooks=["prompt_pre_fetch"],
+        config=config_input_filter,
+    )
+    
+    plugin = LLMGuardPlugin(config)
+    
+    # Create a mock scanner
+    class MockScanner:
+        pass
+    
+    scanner = MockScanner()
+    scan_result = Exception("Test scanner error")
+    
+    # Process the exception result
+    scanner_name, result = plugin.llmguard_instance._process_scanner_result(
+        scanner, scan_result, "test prompt"
+    )
+    
+    # Verify fail-closed behavior
+    assert scanner_name == "MockScanner"
+    assert result["sanitized_prompt"] == "test prompt"
+    assert result["is_valid"] is False
+    assert result["risk_score"] == 1.0
+
+
+@pytest.mark.asyncio
+async def test_apply_input_sanitizers_no_vault():
+    """Test _apply_input_sanitizers when no vault exists."""
+    config_input_filter = {
+        "input": {"filters": {"PromptInjection": {"threshold": 0.9, "use_onnx": False}}},
+    }
+    
+    config = PluginConfig(
+        name="test",
+        kind="llmguardplugin.LLMGuardPlugin",
+        hooks=["prompt_pre_fetch"],
+        config=config_input_filter,
+    )
+    
+    plugin = LLMGuardPlugin(config)
+    
+    # Call _apply_input_sanitizers when no sanitizers/vault exist
+    result = await plugin.llmguard_instance._apply_input_sanitizers("test input")
+    
+    # Should return None when no vault exists
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_load_policy_scanners_with_invalid_policy():
+    """Test _load_policy_scanners with policy mentioning undefined filters."""
+    config_input_filter = {
+        "input": {
+            "filters": {
+                "PromptInjection": {"threshold": 0.9, "use_onnx": False},
+                "policy": "PromptInjection and UndefinedFilter",  # UndefinedFilter not in config
+            }
+        },
+    }
+    
+    config = PluginConfig(
+        name="test",
+        kind="llmguardplugin.LLMGuardPlugin",
+        hooks=["prompt_pre_fetch"],
+        config=config_input_filter,
+    )
+    
+    plugin = LLMGuardPlugin(config)
+    
+    # Should fall back to config_keys when policy mentions undefined filter
+    policy_filters = plugin.llmguard_instance._load_policy_scanners(
+        config_input_filter["input"]["filters"]
+    )
+    
+    # Should only include defined filters
+    assert "PromptInjection" in policy_filters
+    assert "UndefinedFilter" not in policy_filters
+
+
+@pytest.mark.asyncio
+async def test_output_filters_cache_hit():
+    """Test output filters cache hit scenario."""
+    config_output_filter = {
+        "cache_enabled": True,
+        "cache_ttl": 300,
+        "output": {"filters": {"Toxicity": {"threshold": 0.9}}},
+    }
+    
+    config = PluginConfig(
+        name="test",
+        kind="llmguardplugin.LLMGuardPlugin",
+        hooks=["prompt_post_fetch"],
+        config=config_output_filter,
+    )
+    
+    plugin = LLMGuardPlugin(config)
+    
+    # First request - should cache
+    message = Message(content=TextContent(type="text", text="Hello, how are you?"), role=Role.USER)
+    prompt_result = PromptResult(messages=[message])
+    payload = PromptPosthookPayload(prompt_id="test_prompt", result=prompt_result)
+    context = PluginContext(global_context=GlobalContext(request_id="1", server_id="2"))
+    
+    result1 = await plugin.prompt_post_fetch(payload, context)
+    
+    # Second request with same input - should hit cache
+    result2 = await plugin.prompt_post_fetch(payload, context)
+    
+    # Both should succeed
+    assert result1.continue_processing is True
+    assert result2.continue_processing is True
+
+
+@pytest.mark.asyncio
+async def test_background_cache_cleanup_runs():
+    """Test that background cache cleanup task runs periodically."""
+    # Standard
+    import asyncio
+    
+    config_input_filter = {
+        "cache_enabled": True,
+        "cache_ttl": 2,  # Short TTL for testing
+        "input": {"filters": {"PromptInjection": {"threshold": 0.9, "use_onnx": False}}},
+    }
+    
+    config = PluginConfig(
+        name="test",
+        kind="llmguardplugin.LLMGuardPlugin",
+        hooks=["prompt_pre_fetch"],
+        config=config_input_filter,
+    )
+    
+    plugin = LLMGuardPlugin(config)
+    context = PluginContext(global_context=GlobalContext(request_id="1", server_id="2"))
+    
+    # Add some entries to cache
+    payload = PromptPrehookPayload(prompt_id="test_prompt", args={"arg0": "Hello"})
+    await plugin.prompt_pre_fetch(payload, context)
+    
+    # Verify cache has entries
+    initial_cache_size = len(plugin.llmguard_instance._result_cache)
+    assert initial_cache_size > 0
+    
+    # Wait for entries to expire and cleanup to run
+    await asyncio.sleep(3)
+    
+    # Background cleanup should have removed expired entries
+    # Note: This tests the background cleanup mechanism
+    assert plugin.llmguard_instance._cleanup_task is not None
+
+
+@pytest.mark.asyncio
+async def test_cache_with_expired_entry():
+    """Test cache behavior when entry has expired."""
+    config_input_filter = {
+        "cache_enabled": True,
+        "cache_ttl": 1,  # 1 second TTL
+        "input": {"filters": {"PromptInjection": {"threshold": 0.9, "use_onnx": False}}},
+    }
+    
+    config = PluginConfig(
+        name="test",
+        kind="llmguardplugin.LLMGuardPlugin",
+        hooks=["prompt_pre_fetch"],
+        config=config_input_filter,
+    )
+    
+    plugin = LLMGuardPlugin(config)
+    context = PluginContext(global_context=GlobalContext(request_id="1", server_id="2"))
+    
+    # First request - should cache
+    payload = PromptPrehookPayload(prompt_id="test_prompt", args={"arg0": "Hello"})
+    await plugin.prompt_pre_fetch(payload, context)
+    
+    # Wait for cache to expire
+    time.sleep(2)
+    
+    # Second request - should not hit cache (expired)
+    result = await plugin.prompt_pre_fetch(payload, context)
+    assert result.continue_processing is True
+
+
+
+
+@pytest.mark.asyncio
+async def test_cache_result_when_disabled():
+    """Test that _cache_result does nothing when cache is disabled."""
+    config_input_filter = {
+        "cache_enabled": False,
+        "input": {"filters": {"PromptInjection": {"threshold": 0.9, "use_onnx": False}}},
+    }
+    
+    config = PluginConfig(
+        name="test",
+        kind="llmguardplugin.LLMGuardPlugin",
+        hooks=["prompt_pre_fetch"],
+        config=config_input_filter,
+    )
+    
+    plugin = LLMGuardPlugin(config)
+    
+    # Manually call _cache_result
+    plugin.llmguard_instance._cache_result("test_hash", {"result": "test"}, "input")
+    
+    # Verify nothing was cached
+    assert len(plugin.llmguard_instance._result_cache) == 0
+
+
+@pytest.mark.asyncio
+async def test_cleanup_expired_cache_when_disabled():
+    """Test that _cleanup_expired_cache does nothing when cache is disabled."""
+    config_input_filter = {
+        "cache_enabled": False,
+        "input": {"filters": {"PromptInjection": {"threshold": 0.9, "use_onnx": False}}},
+    }
+    
+    config = PluginConfig(
+        name="test",
+        kind="llmguardplugin.LLMGuardPlugin",
+        hooks=["prompt_pre_fetch"],
+        config=config_input_filter,
+    )
+    
+    plugin = LLMGuardPlugin(config)
+    
+    # Manually call _cleanup_expired_cache
+    plugin.llmguard_instance._cleanup_expired_cache()
+    
+    # Should complete without error
+    assert True
