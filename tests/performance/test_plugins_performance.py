@@ -227,7 +227,8 @@ async def profile_all_plugins(manager: PluginManager, show_details: bool = False
     plugins_info = []
     for plugin_config in manager.config.plugins:
         if plugin_config.mode != "disabled":
-            plugins_info.append((plugin_config.name, plugin_config.hooks))
+            plugin_ref = manager.get_plugin(plugin_config.name)
+            plugins_info.append((plugin_config.name, plugin_ref.hooks))
 
     print(f"\nProfiling {len(plugins_info)} enabled plugins...")
     print(f"Iterations per hook: {ITERATIONS}")
