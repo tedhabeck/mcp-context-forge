@@ -31,8 +31,8 @@ import io
 import logging
 import os
 import pstats
-import sys
 from pstats import SortKey
+import sys
 from typing import Any, Dict, Tuple
 
 # Disable security warnings
@@ -228,6 +228,9 @@ async def profile_all_plugins(manager: PluginManager, show_details: bool = False
     for plugin_config in manager.config.plugins:
         if plugin_config.mode != "disabled":
             plugin_ref = manager.get_plugin(plugin_config.name)
+            if plugin_ref is None:
+                print(f"  Warning: Enabled plugin '{plugin_config.name}' not found in registry, skipping")
+                continue
             plugins_info.append((plugin_config.name, plugin_ref.hooks))
 
     print(f"\nProfiling {len(plugins_info)} enabled plugins...")
