@@ -66,8 +66,8 @@ class CacheTTLDict(dict):
         # Log key and size only - serialized_obj may contain PII
         logger.debug("Updating cache for key: %s, size: %d bytes", key, len(serialized_obj))
         async with self.cache.pipeline() as pipe:
-            pipe.set(key, serialized_obj)
-            pipe.expire(key, self.cache_ttl)
+            await pipe.set(key, serialized_obj)
+            await pipe.expire(key, self.cache_ttl)
             results = await pipe.execute()
             success_set, success_expiry = results[0], results[1]
             if success_set:
