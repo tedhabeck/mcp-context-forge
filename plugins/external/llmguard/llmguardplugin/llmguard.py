@@ -70,6 +70,13 @@ llm_guard_cache_misses_total = Counter(
     labelnames=["scan_type"],
 )
 
+llm_guard_scanner_init_duration_seconds = Histogram(
+    "llm_guard_scanner_init_duration_seconds",
+    "Duration of scanner initialization in seconds",
+    labelnames=["scanner_type", "scanner_category"],
+    buckets=(0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0),
+)
+
 
 class LLMGuardBase:
     """Base class that leverages LLMGuard library to apply a combination of filters (returns true of false, allowing or denying an input (like PromptInjection)) and sanitizers (transforms the input, like Anonymizer and Deanonymizer) for both input and output prompt.
@@ -97,7 +104,7 @@ class LLMGuardBase:
         self._result_cache: dict[str, tuple[Any, float]] = {}  # {content_hash: (result, timestamp)}
         self._cleanup_task: Optional[asyncio.Task] = None
         self._shutdown_event = asyncio.Event()
-        logger.info(f"Result cache initialized: enabled={self.cache_enabled}, ttl={self.cache_ttl}s")
+        logger.info("Result cache initialized: enabled=%s, ttl=%ds", self.cache_enabled, self.cache_ttl)
 
         # Start background cache cleanup task
         if self.cache_enabled:
@@ -111,7 +118,7 @@ class LLMGuardBase:
         blocking the main request flow.
         """
         cleanup_interval = max(self.cache_ttl / 2, 30)  # At least every 30 seconds
-        logger.info(f"Background cache cleanup running every {cleanup_interval}s")
+        logger.info("Background cache cleanup running every %.1fs", cleanup_interval)
 
         while not self._shutdown_event.is_set():
             try:
@@ -332,18 +339,28 @@ class LLMGuardBase:
 
     def _initialize_input_filters(self) -> None:
         """Initializes the input filters"""
+        start_time = time.time()
         policy_filter_names = self._load_policy_scanners(self.lgconfig.input.filters)
         try:
             for filter_name in policy_filter_names:
+                filter_start = time.time()
                 self.scanners["input"]["filters"].append(input_scanners.get_scanner_by_name(filter_name, self.lgconfig.input.filters[filter_name]))
+                filter_duration = time.time() - filter_start
+                llm_guard_scanner_init_duration_seconds.labels(scanner_type=filter_name, scanner_category="input_filters").observe(filter_duration)
+                logger.debug("Initialized input filter %s in %.3fs", filter_name, filter_duration)
         except Exception as e:
             logger.error("Error initializing filters %s", e)
+        
+        total_duration = time.time() - start_time
+        logger.info("Initialized %d input filters in %.3fs", len(policy_filter_names), total_duration)
 
     def _initialize_input_sanitizers(self) -> None:
         """Initializes the input sanitizers"""
+        start_time = time.time()
         try:
             sanitizer_names = self.lgconfig.input.sanitizers.keys()
             for sanitizer_name in sanitizer_names:
+                sanitizer_start = time.time()
                 if sanitizer_name == "Anonymize":
                     vault = self._create_vault()
                     if "vault_ttl" in self.lgconfig.input.sanitizers[sanitizer_name]:
@@ -355,33 +372,59 @@ class LLMGuardBase:
                     self.scanners["input"]["sanitizers"].append(input_scanners.get_scanner_by_name(sanitizer_name, anonymizer_config))
                 else:
                     self.scanners["input"]["sanitizers"].append(input_scanners.get_scanner_by_name(sanitizer_name, self.lgconfig.input.sanitizers[sanitizer_name]))
+                
+                sanitizer_duration = time.time() - sanitizer_start
+                llm_guard_scanner_init_duration_seconds.labels(scanner_type=sanitizer_name, scanner_category="input_sanitizers").observe(sanitizer_duration)
+                logger.debug("Initialized input sanitizer %s in %.3fs", sanitizer_name, sanitizer_duration)
         except Exception as e:
             logger.error("Error initializing sanitizers %s", e)
+        
+        total_duration = time.time() - start_time
+        logger.info("Initialized %d input sanitizers in %.3fs", len(list(self.lgconfig.input.sanitizers.keys())), total_duration)
 
     def _initialize_output_filters(self) -> None:
         """Initializes output filters"""
+        start_time = time.time()
         policy_filter_names = self._load_policy_scanners(self.lgconfig.output.filters)
         try:
             for filter_name in policy_filter_names:
+                filter_start = time.time()
                 self.scanners["output"]["filters"].append(output_scanners.get_scanner_by_name(filter_name, self.lgconfig.output.filters[filter_name]))
+                filter_duration = time.time() - filter_start
+                llm_guard_scanner_init_duration_seconds.labels(scanner_type=filter_name, scanner_category="output_filters").observe(filter_duration)
+                logger.debug("Initialized output filter %s in %.3fs", filter_name, filter_duration)
 
         except Exception as e:
             logger.error("Error initializing filters %s", e)
+        
+        total_duration = time.time() - start_time
+        logger.info("Initialized %d output filters in %.3fs", len(policy_filter_names), total_duration)
 
     def _initialize_output_sanitizers(self) -> None:
         """Initializes output sanitizers"""
+        start_time = time.time()
         sanitizer_names = self.lgconfig.output.sanitizers.keys()
         try:
             for sanitizer_name in sanitizer_names:
+                sanitizer_start = time.time()
                 if sanitizer_name == "Deanonymize":
                     self.lgconfig.output.sanitizers[sanitizer_name]["vault"] = Vault()
                 self.scanners["output"]["sanitizers"].append(output_scanners.get_scanner_by_name(sanitizer_name, self.lgconfig.output.sanitizers[sanitizer_name]))
+                sanitizer_duration = time.time() - sanitizer_start
+                llm_guard_scanner_init_duration_seconds.labels(scanner_type=sanitizer_name, scanner_category="output_sanitizers").observe(sanitizer_duration)
+                logger.debug("Initialized output sanitizer %s in %.3fs", sanitizer_name, sanitizer_duration)
             logger.info(self.scanners)
         except Exception as e:
             logger.error("Error initializing filters %s", e)
+        
+        total_duration = time.time() - start_time
+        logger.info("Initialized %d output sanitizers in %.3fs", len(list(sanitizer_names)), total_duration)
 
     def __init_scanners(self):
         """Initializes all scanners defined in the config"""
+        overall_start = time.time()
+        logger.info("Starting scanner initialization")
+        
         if self.lgconfig.input and self.lgconfig.input.filters:
             self._initialize_input_filters()
         if self.lgconfig.output and self.lgconfig.output.filters:
@@ -390,6 +433,16 @@ class LLMGuardBase:
             self._initialize_input_sanitizers()
         if self.lgconfig.output and self.lgconfig.output.sanitizers:
             self._initialize_output_sanitizers()
+        
+        overall_duration = time.time() - overall_start
+        total_scanners = (
+            len(self.scanners["input"]["filters"]) +
+            len(self.scanners["input"]["sanitizers"]) +
+            len(self.scanners["output"]["filters"]) +
+            len(self.scanners["output"]["sanitizers"])
+        )
+        logger.info("Completed initialization of %d total scanners in %.3fs", total_scanners, overall_duration)
+        llm_guard_scanner_init_duration_seconds.labels(scanner_type="all", scanner_category="total").observe(overall_duration)
 
     def _process_scanner_result(self, scanner, scan_result, default_prompt: str) -> tuple[str, dict[str, Any]]:
         """Process scanner result, handling exceptions with fail-closed security.
