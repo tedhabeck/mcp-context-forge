@@ -33,7 +33,6 @@ from datetime import datetime, timezone
 from functools import lru_cache
 import hashlib
 import html
-import os as _os  # local alias to avoid collisions
 import sys
 from typing import Any, AsyncIterator, Dict, List, Optional, Union
 from urllib.parse import urlparse, urlunparse
@@ -141,7 +140,7 @@ from mcpgateway.services.server_service import ServerError, ServerLockConflictEr
 from mcpgateway.services.tag_service import TagService
 from mcpgateway.services.tool_service import ToolError, ToolLockConflictError, ToolNameConflictError, ToolNotFoundError
 from mcpgateway.transports.sse_transport import SSETransport
-from mcpgateway.transports.streamablehttp_transport import SessionManagerWrapper, streamable_http_auth
+from mcpgateway.transports.streamablehttp_transport import SessionManagerWrapper, set_shared_session_registry, streamable_http_auth
 from mcpgateway.utils.db_isready import wait_for_db_ready
 from mcpgateway.utils.error_formatter import ErrorFormatter
 from mcpgateway.utils.metadata_capture import MetadataCapture
@@ -177,15 +176,16 @@ except RuntimeError:
 else:
     loop.create_task(bootstrap_db())
 
-# Initialize plugin manager as a singleton (honor env overrides for tests)
-_env_flag = _os.getenv("PLUGINS_ENABLED")
-if _env_flag is not None:
-    _env_enabled = _env_flag.strip().lower() in {"1", "true", "yes", "on"}
-    _PLUGINS_ENABLED = _env_enabled
+# Initialize plugin manager as a singleton.
+_PLUGINS_ENABLED = settings.plugins.enabled
+if _PLUGINS_ENABLED:
+    _plugin_settings = settings.plugins
+    # First-Party
+    from mcpgateway.plugins.policy import HOOK_PAYLOAD_POLICIES  # noqa: E402
+
+    plugin_manager: PluginManager | None = PluginManager(_plugin_settings.config_file, timeout=_plugin_settings.plugin_timeout, hook_policies=HOOK_PAYLOAD_POLICIES)
 else:
-    _PLUGINS_ENABLED = settings.plugins_enabled
-_config_file = _os.getenv("PLUGIN_CONFIG_FILE", settings.plugin_config_file)
-plugin_manager: PluginManager | None = PluginManager(_config_file) if _PLUGINS_ENABLED else None
+    plugin_manager = None  # pylint: disable=invalid-name
 
 
 # First-Party
@@ -221,6 +221,7 @@ session_registry = SessionRegistry(
     session_ttl=settings.session_ttl,
     message_ttl=settings.message_ttl,
 )
+set_shared_session_registry(session_registry)
 
 
 # Helper function for authentication compatibility
@@ -2106,11 +2107,17 @@ else:
 # Note: Middleware runs in REVERSE order (last added runs first)
 # If AuthContextMiddleware is already registered, ObservabilityMiddleware wraps it
 # Execution order will be: AuthContext -> Observability -> Request Handler
+# Wire observability adapter into the plugin manager when observability is enabled
 if settings.observability_enabled:
     # First-Party
     from mcpgateway.middleware.observability_middleware import ObservabilityMiddleware
+    from mcpgateway.plugins.observability_adapter import ObservabilityServiceAdapter
+    from mcpgateway.services.observability_service import ObservabilityService
 
-    app.add_middleware(ObservabilityMiddleware, enabled=True)
+    _service = ObservabilityService()
+    app.add_middleware(ObservabilityMiddleware, enabled=True, service=_service)
+    if plugin_manager:
+        plugin_manager.observability = ObservabilityServiceAdapter(service=_service)
     logger.info("🔍 Observability middleware enabled - tracing include-listed requests")
 else:
     logger.info("🔍 Observability middleware disabled")

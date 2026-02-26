@@ -18,7 +18,6 @@ It handles:
 import binascii
 from datetime import datetime, timezone
 from functools import lru_cache
-import os
 from string import Formatter
 import time
 from typing import Any, AsyncGenerator, Dict, List, Optional, Set, Union
@@ -40,7 +39,7 @@ from mcpgateway.db import get_for_update
 from mcpgateway.db import Prompt as DbPrompt
 from mcpgateway.db import PromptMetric, PromptMetricsHourly, server_prompt_association
 from mcpgateway.observability import create_span
-from mcpgateway.plugins.framework import GlobalContext, PluginContextTable, PluginManager, PromptHookType, PromptPosthookPayload, PromptPrehookPayload
+from mcpgateway.plugins.framework import get_plugin_manager, GlobalContext, PluginContextTable, PluginManager, PromptHookType, PromptPosthookPayload, PromptPrehookPayload
 from mcpgateway.schemas import PromptCreate, PromptRead, PromptUpdate, TopPerformer
 from mcpgateway.services.audit_trail_service import get_audit_trail_service
 from mcpgateway.services.event_service import EventService
@@ -202,15 +201,7 @@ class PromptService:
         self._event_service = EventService(channel_name="mcpgateway:prompt_events")
         # Use the module-level singleton for template caching
         self._jinja_env = _get_jinja_env()
-        # Initialize plugin manager with env overrides for testability
-        env_flag = os.getenv("PLUGINS_ENABLED")
-        if env_flag is not None:
-            env_enabled = env_flag.strip().lower() in {"1", "true", "yes", "on"}
-            plugins_enabled = env_enabled
-        else:
-            plugins_enabled = settings.plugins_enabled
-        config_file = os.getenv("PLUGIN_CONFIG_FILE", getattr(settings, "plugin_config_file", "plugins/config.yaml"))
-        self._plugin_manager: PluginManager | None = PluginManager(config_file) if plugins_enabled else None
+        self._plugin_manager: PluginManager | None = get_plugin_manager()
 
     async def initialize(self) -> None:
         """Initialize the service."""

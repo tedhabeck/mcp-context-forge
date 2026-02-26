@@ -502,6 +502,10 @@ class Settings(BaseSettings):
         default=False,
         description="Allow unauthenticated users to self-register accounts. When false, only admins can create users via /admin/users endpoint.",
     )
+    allow_public_visibility: bool = Field(
+        default=True,
+        description="When false, creating or updating any entity with public visibility is blocked in team scope.",
+    )
     protect_all_admins: bool = Field(
         default=True,
         description="When true (default), prevent any admin from being demoted, deactivated, or locked out via API/UI. When false, only the last active admin is protected.",
@@ -1694,14 +1698,6 @@ class Settings(BaseSettings):
     streamable_http_max_events_per_stream: int = 100  # Ring buffer capacity per stream
     streamable_http_event_ttl: int = 3600  # Event stream TTL in seconds (1 hour)
 
-    # Core plugin settings
-    plugins_enabled: bool = Field(default=False, description="Enable the plugin framework")
-    plugin_config_file: str = Field(default="plugins/config.yaml", description="Path to main plugin configuration file")
-
-    # Plugin CLI settings
-    plugins_cli_completion: bool = Field(default=False, description="Enable auto-completion for plugins CLI")
-    plugins_cli_markup_mode: Literal["markdown", "rich", "disabled"] | None = Field(default=None, description="Set markup mode for plugins CLI")
-
     # Development
     dev_mode: bool = False
     reload: bool = False
@@ -2430,6 +2426,22 @@ def generate_settings_schema() -> dict[str, Any]:
 # Lazy "instance" of settings
 class LazySettingsWrapper:
     """Lazily initialize settings singleton on getattr"""
+
+    @property
+    def plugins(self) -> Any:
+        """Access plugin framework settings via ``settings.plugins``.
+
+        Returns a ``LazySettingsWrapper`` from the plugin framework that
+        provides lightweight ``@property`` accessors for startup-critical
+        fields and a ``__getattr__`` fallback to the full ``PluginsSettings``.
+
+        Returns:
+            The plugin framework settings wrapper.
+        """
+        # First-Party
+        from mcpgateway.plugins.framework.settings import settings as _plugin_settings  # pylint: disable=import-outside-toplevel
+
+        return _plugin_settings
 
     def __getattr__(self, key: str) -> Any:
         """Get the real settings object and forward to it
