@@ -147,7 +147,7 @@ class LLMGuardPlugin(Plugin):
         Args:
             context: The plugin context to update with vault cache ID.
         """
-        _, vault_id, vault_tuples = self.llmguard_instance._retreive_vault()
+        _, vault_id, vault_tuples = self.llmguard_instance._retrieve_vault()
         if vault_id and vault_tuples:
             success, _ = await self.cache.update_cache(vault_id, vault_tuples)
             if success and self.lgconfig.set_guardrails_context:

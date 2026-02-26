@@ -258,7 +258,7 @@ class LLMGuardBase:
         logger.info("Vault creation time %s", vault.creation_time)
         return vault
 
-    def _retreive_vault(self, sanitizer_names: list | None = None) -> tuple[Vault | None, int | None, tuple | None]:
+    def _retrieve_vault(self, sanitizer_names: list | None = None) -> tuple[Vault | None, int | None, tuple | None]:
         """This function is responsible for retrieving vault for given sanitizer names
 
         Args:
@@ -544,7 +544,7 @@ class LLMGuardBase:
                     "is_valid" which is boolean that says if the prompt is valid or not based on a scanner applied and "risk_score" which gives the risk score assigned by the scanner to the prompt.
         """
         start_time = time.time()
-        vault, _, _ = self._retreive_vault()
+        vault, _, _ = self._retrieve_vault()
         if vault is None:
             return None
         # Check for expiry of vault, every time before a sanitizer is applied.
