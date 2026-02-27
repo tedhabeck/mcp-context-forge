@@ -96,6 +96,7 @@ class LLMGuardBase:
         self.lgconfig = LLMGuardConfig.model_validate(config)
         self.scanners = {"input": {"sanitizers": [], "filters": []}, "output": {"sanitizers": [], "filters": []}}
         self.vault_ttl = None
+        self.scanner_name_map = {}
         self.__init_scanners()
         self.policy = GuardrailPolicy()
 
@@ -271,19 +272,21 @@ class LLMGuardBase:
             sanitizer_names = ["Anonymize"]
         vault_id = None
         vault_tuples = None
+        vault: Vault | None = None
         length = len(self.scanners["input"]["sanitizers"])
         if length == 0:
             return None, vault_id, vault_tuples
         for i in range(length):
-            scanner_name = type(self.scanners["input"]["sanitizers"][i]).__name__
+            scanner_name = self.scanner_name_map.get(i)
             if scanner_name in sanitizer_names:
                 try:
                     logger.info(self.scanners["input"]["sanitizers"][i]._vault._tuples)
                     vault_id = id(self.scanners["input"]["sanitizers"][i]._vault)
+                    vault = self.scanners["input"]["sanitizers"][i]._vault
                     vault_tuples = self.scanners["input"]["sanitizers"][i]._vault._tuples
                 except Exception as e:
                     logger.error("Error retrieving scanner %s: %s", scanner_name, e)
-        return self.scanners["input"]["sanitizers"][i]._vault, vault_id, vault_tuples
+        return vault, vault_id, vault_tuples
 
     def _update_input_sanitizers(self, sanitizer_names: list | None = None) -> None:
         """This function is responsible for updating vault for given sanitizer names in input
@@ -294,7 +297,7 @@ class LLMGuardBase:
             sanitizer_names = ["Anonymize"]
         length = len(self.scanners["input"]["sanitizers"])
         for i in range(length):
-            scanner_name = type(self.scanners["input"]["sanitizers"][i]).__name__
+            scanner_name = self.scanner_name_map.get(i)
             if scanner_name in sanitizer_names:
                 try:
                     del self.scanners["input"]["sanitizers"][i]._vault
@@ -357,7 +360,7 @@ class LLMGuardBase:
                 logger.debug("Initialized input filter %s in %.3fs", filter_name, filter_duration)
         except Exception as e:
             logger.error("Error initializing filters %s", e)
-        
+
         total_duration = time.time() - start_time
         logger.info("Initialized %d input filters in %.3fs", len(policy_filter_names), total_duration)
 
@@ -365,6 +368,7 @@ class LLMGuardBase:
         """Initializes the input sanitizers"""
         start_time = time.time()
         try:
+            sanitizer_count = 0
             sanitizer_names = self.lgconfig.input.sanitizers.keys()
             for sanitizer_name in sanitizer_names:
                 sanitizer_start = time.time()
@@ -377,15 +381,17 @@ class LLMGuardBase:
                     logger.info("Anonymizer config %s", anonymizer_config)
                     logger.info("sanitizer config %s", self.lgconfig.input.sanitizers[sanitizer_name])
                     self.scanners["input"]["sanitizers"].append(input_scanners.get_scanner_by_name(sanitizer_name, anonymizer_config))
+                    self.scanner_name_map[sanitizer_count] = sanitizer_name
                 else:
                     self.scanners["input"]["sanitizers"].append(input_scanners.get_scanner_by_name(sanitizer_name, self.lgconfig.input.sanitizers[sanitizer_name]))
-                
+                    self.scanner_name_map[sanitizer_count] = sanitizer_name
+                sanitizer_count += 1
                 sanitizer_duration = time.time() - sanitizer_start
                 llm_guard_scanner_init_duration_seconds.labels(scanner_type=sanitizer_name, scanner_category="input_sanitizers").observe(sanitizer_duration)
                 logger.debug("Initialized input sanitizer %s in %.3fs", sanitizer_name, sanitizer_duration)
         except Exception as e:
             logger.error("Error initializing sanitizers %s", e)
-        
+
         total_duration = time.time() - start_time
         logger.info("Initialized %d input sanitizers in %.3fs", len(list(self.lgconfig.input.sanitizers.keys())), total_duration)
 
@@ -403,7 +409,7 @@ class LLMGuardBase:
 
         except Exception as e:
             logger.error("Error initializing filters %s", e)
-        
+
         total_duration = time.time() - start_time
         logger.info("Initialized %d output filters in %.3fs", len(policy_filter_names), total_duration)
 
@@ -423,7 +429,7 @@ class LLMGuardBase:
             logger.info(self.scanners)
         except Exception as e:
             logger.error("Error initializing filters %s", e)
-        
+
         total_duration = time.time() - start_time
         logger.info("Initialized %d output sanitizers in %.3fs", len(list(sanitizer_names)), total_duration)
 
@@ -431,7 +437,7 @@ class LLMGuardBase:
         """Initializes all scanners defined in the config"""
         overall_start = time.time()
         logger.info("Starting scanner initialization")
-        
+
         if self.lgconfig.input and self.lgconfig.input.filters:
             self._initialize_input_filters()
         if self.lgconfig.output and self.lgconfig.output.filters:
@@ -440,14 +446,9 @@ class LLMGuardBase:
             self._initialize_input_sanitizers()
         if self.lgconfig.output and self.lgconfig.output.sanitizers:
             self._initialize_output_sanitizers()
-        
+
         overall_duration = time.time() - overall_start
-        total_scanners = (
-            len(self.scanners["input"]["filters"]) +
-            len(self.scanners["input"]["sanitizers"]) +
-            len(self.scanners["output"]["filters"]) +
-            len(self.scanners["output"]["sanitizers"])
-        )
+        total_scanners = len(self.scanners["input"]["filters"]) + len(self.scanners["input"]["sanitizers"]) + len(self.scanners["output"]["filters"]) + len(self.scanners["output"]["sanitizers"])
         logger.info("Completed initialization of %d total scanners in %.3fs", total_scanners, overall_duration)
         llm_guard_scanner_init_duration_seconds.labels(scanner_type="all", scanner_category="total").observe(overall_duration)
 
