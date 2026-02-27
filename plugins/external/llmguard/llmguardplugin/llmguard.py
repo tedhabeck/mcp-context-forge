@@ -96,6 +96,7 @@ class LLMGuardBase:
         self.lgconfig = LLMGuardConfig.model_validate(config)
         self.scanners = {"input": {"sanitizers": [], "filters": []}, "output": {"sanitizers": [], "filters": []}}
         self.vault_ttl = None
+        self.vault_disabled = True
         self.scanner_name_map = {}
         self.__init_scanners()
         self.policy = GuardrailPolicy()
@@ -237,8 +238,6 @@ class LLMGuardBase:
             boolean to indicate if vault has expired or not. If true, then vault has expired and has been reinitialized,
             if false, then vault hasn't expired yet.
         """
-        logger.info("Vault creation time %s", vault.creation_time)
-        logger.info("Vault ttl %s", self.vault_ttl)
         if datetime.now() - vault.creation_time > timedelta(seconds=self.vault_ttl):
             del vault
             logger.info("Vault successfully deleted after expiry")
@@ -376,6 +375,8 @@ class LLMGuardBase:
                     vault = self._create_vault()
                     if "vault_ttl" in self.lgconfig.input.sanitizers[sanitizer_name]:
                         self.vault_ttl = self.lgconfig.input.sanitizers[sanitizer_name]["vault_ttl"]
+                        if self.vault_ttl is not None and self.vault_ttl != 0:
+                            self.vault_disabled = False
                     self.lgconfig.input.sanitizers[sanitizer_name]["vault"] = vault
                     anonymizer_config = {k: v for k, v in self.lgconfig.input.sanitizers[sanitizer_name].items() if k not in ["vault_ttl", "vault_leak_detection"]}
                     logger.info("Anonymizer config %s", anonymizer_config)
@@ -549,7 +550,7 @@ class LLMGuardBase:
         if vault is None:
             return None
         # Check for expiry of vault, every time before a sanitizer is applied.
-        vault_update_status = await self._create_new_vault_on_expiry(vault)
+        vault_update_status = False if self.vault_disabled else await self._create_new_vault_on_expiry(vault)
         logger.info("Status of vault_update %s", vault_update_status)
         result = await asyncio.to_thread(scan_prompt, self.scanners["input"]["sanitizers"], input_prompt)
         if "Anonymize" in result[1]:
