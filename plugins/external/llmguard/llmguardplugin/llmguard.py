@@ -95,8 +95,6 @@ class LLMGuardBase:
 
         self.lgconfig = LLMGuardConfig.model_validate(config)
         self.scanners = {"input": {"sanitizers": [], "filters": []}, "output": {"sanitizers": [], "filters": []}}
-        self.vault_ttl = None
-        self.vault_disabled = True
         self.scanner_name_map = {}
         self.__init_scanners()
         self.policy = GuardrailPolicy()
@@ -238,15 +236,16 @@ class LLMGuardBase:
             boolean to indicate if vault has expired or not. If true, then vault has expired and has been reinitialized,
             if false, then vault hasn't expired yet.
         """
-        if datetime.now() - vault.creation_time > timedelta(seconds=self.vault_ttl):
-            del vault
-            logger.info("Vault successfully deleted after expiry")
-            # Reinitalize the scanner with new vault
-            self._update_input_sanitizers()
-            return True
+        if vault.expires_at is not None:
+            if datetime.now() > vault.expires_at:
+                del vault
+                logger.info("Vault successfully deleted after expiry")
+                # Reinitalize the scanner with new vault
+                self._update_input_sanitizers()
+                return True
         return False
 
-    def _create_vault(self) -> Vault:
+    def _create_vault(self, vault_ttl) -> Vault:
         """This function creates a new vault and sets it's creation time as it's attribute
 
         Returns:
@@ -255,7 +254,11 @@ class LLMGuardBase:
         logger.info("Vault creation")
         vault = Vault()
         vault.creation_time = datetime.now()
+        vault.vault_ttl = vault_ttl
         logger.info("Vault creation time %s", vault.creation_time)
+        if vault_ttl is not None and vault_ttl != 0:
+            vault.expires_at = datetime.now() + timedelta(seconds=vault_ttl)
+            logger.info("Vault expires at %s", vault.expires_at)
         return vault
 
     def _retrieve_vault(self, sanitizer_names: list | None = None) -> tuple[Vault | None, int | None, tuple | None]:
@@ -299,8 +302,9 @@ class LLMGuardBase:
             scanner_name = self.scanner_name_map.get(i)
             if scanner_name in sanitizer_names:
                 try:
+                    vault_ttl = self.scanners["input"]["sanitizers"][i]._vault.vault_ttl
                     del self.scanners["input"]["sanitizers"][i]._vault
-                    vault = self._create_vault()
+                    vault = self._create_vault(vault_ttl)
                     self.scanners["input"]["sanitizers"][i]._vault = vault
                     logger.info(self.scanners["input"]["sanitizers"][i]._vault._tuples)
                 except Exception as e:
@@ -372,11 +376,10 @@ class LLMGuardBase:
             for sanitizer_name in sanitizer_names:
                 sanitizer_start = time.time()
                 if sanitizer_name == "Anonymize":
-                    vault = self._create_vault()
+                    vault_ttl: int | None = None
                     if "vault_ttl" in self.lgconfig.input.sanitizers[sanitizer_name]:
-                        self.vault_ttl = self.lgconfig.input.sanitizers[sanitizer_name]["vault_ttl"]
-                        if self.vault_ttl is not None and self.vault_ttl != 0:
-                            self.vault_disabled = False
+                        vault_ttl = self.lgconfig.input.sanitizers[sanitizer_name]["vault_ttl"]
+                    vault = self._create_vault(vault_ttl)
                     self.lgconfig.input.sanitizers[sanitizer_name]["vault"] = vault
                     anonymizer_config = {k: v for k, v in self.lgconfig.input.sanitizers[sanitizer_name].items() if k not in ["vault_ttl", "vault_leak_detection"]}
                     logger.info("Anonymizer config %s", anonymizer_config)
@@ -550,7 +553,7 @@ class LLMGuardBase:
         if vault is None:
             return None
         # Check for expiry of vault, every time before a sanitizer is applied.
-        vault_update_status = False if self.vault_disabled else await self._create_new_vault_on_expiry(vault)
+        vault_update_status: bool = await self._create_new_vault_on_expiry(vault)
         logger.info("Status of vault_update %s", vault_update_status)
         result = await asyncio.to_thread(scan_prompt, self.scanners["input"]["sanitizers"], input_prompt)
         if "Anonymize" in result[1]:
