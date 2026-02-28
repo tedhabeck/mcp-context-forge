@@ -584,7 +584,7 @@ Set `export PLUGINS_ENABLED=true`
     priority: 20 # adjust the priority
     mcp:
       proto: STREAMABLEHTTP
-      url: http://127.0.0.1:8001/mcp
+      url: http://localhost:8001/mcp
 
 ```
 
