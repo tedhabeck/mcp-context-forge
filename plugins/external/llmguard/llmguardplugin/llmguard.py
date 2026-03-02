@@ -35,6 +35,12 @@ logger = logging_service.get_logger(__name__)
 # Quiet the llm_guard logger to reduce noise
 configure_logger("ERROR", True)
 # Prometheus metrics
+llm_guard_errors_total = Counter(
+    "llm_guard_errors_total",
+    "Total number of LLM Guard errors by type",
+    labelnames=["error_type", "scanner_category", "scanner_name"],
+)
+
 llm_guard_scan_duration_seconds = Histogram(
     "llm_guard_scan_duration_seconds",
     "Duration of LLM Guard scans in seconds",
@@ -288,6 +294,11 @@ class LLMGuardBase:
                     vault_tuples = self.scanners["input"]["sanitizers"][i]._vault._tuples
                 except Exception as e:
                     logger.error("Error retrieving scanner %s: %s", scanner_name, e)
+                    llm_guard_errors_total.labels(
+                        error_type="vault_retrieval_error",
+                        scanner_category="input_sanitizers",
+                        scanner_name=scanner_name
+                    ).inc()
         return vault, vault_id, vault_tuples
 
     def _update_input_sanitizers(self, sanitizer_names: list | None = None) -> None:
@@ -309,6 +320,11 @@ class LLMGuardBase:
                     logger.info(self.scanners["input"]["sanitizers"][i]._vault._tuples)
                 except Exception as e:
                     logger.error("Error updating scanner %s: %s", scanner_name, e)
+                    llm_guard_errors_total.labels(
+                        error_type="vault_update_error",
+                        scanner_category="input_sanitizers",
+                        scanner_name=scanner_name
+                    ).inc()
 
     def _update_output_sanitizers(self, config, sanitizer_names: list | None = None) -> None:
         """This function is responsible for updating vault for given sanitizer names in output
@@ -329,6 +345,11 @@ class LLMGuardBase:
                     logger.info(self.scanners["output"]["sanitizers"][i]._vault._tuples)
                 except Exception as e:
                     logger.error("Error updating scanner %s: %s", scanner_name, e)
+                    llm_guard_errors_total.labels(
+                        error_type="vault_update_error",
+                        scanner_category="output_sanitizers",
+                        scanner_name=scanner_name
+                    ).inc()
 
     def _load_policy_scanners(self, config: dict = None) -> list:
         """Loads all the scanner names defined in a policy.
@@ -363,6 +384,11 @@ class LLMGuardBase:
                 logger.debug("Initialized input filter %s in %.3fs", filter_name, filter_duration)
         except Exception as e:
             logger.error("Error initializing filters %s", e)
+            llm_guard_errors_total.labels(
+                error_type="scanner_init_error",
+                scanner_category="input_filters",
+                scanner_name="unknown"
+            ).inc()
 
         total_duration = time.time() - start_time
         logger.info("Initialized %d input filters in %.3fs", len(policy_filter_names), total_duration)
@@ -395,6 +421,11 @@ class LLMGuardBase:
                 logger.debug("Initialized input sanitizer %s in %.3fs", sanitizer_name, sanitizer_duration)
         except Exception as e:
             logger.error("Error initializing sanitizers %s", e)
+            llm_guard_errors_total.labels(
+                error_type="scanner_init_error",
+                scanner_category="input_sanitizers",
+                scanner_name="unknown"
+            ).inc()
 
         total_duration = time.time() - start_time
         logger.info("Initialized %d input sanitizers in %.3fs", len(list(self.lgconfig.input.sanitizers.keys())), total_duration)
@@ -413,6 +444,11 @@ class LLMGuardBase:
 
         except Exception as e:
             logger.error("Error initializing filters %s", e)
+            llm_guard_errors_total.labels(
+                error_type="scanner_init_error",
+                scanner_category="output_filters",
+                scanner_name="unknown"
+            ).inc()
 
         total_duration = time.time() - start_time
         logger.info("Initialized %d output filters in %.3fs", len(policy_filter_names), total_duration)
@@ -433,6 +469,11 @@ class LLMGuardBase:
             logger.info(self.scanners)
         except Exception as e:
             logger.error("Error initializing filters %s", e)
+            llm_guard_errors_total.labels(
+                error_type="scanner_init_error",
+                scanner_category="output_sanitizers",
+                scanner_name="unknown"
+            ).inc()
 
         total_duration = time.time() - start_time
         logger.info("Initialized %d output sanitizers in %.3fs", len(list(sanitizer_names)), total_duration)
@@ -466,6 +507,13 @@ class LLMGuardBase:
 
         if isinstance(scan_result, Exception):
             logger.error("Scanner %s failed: %s", scanner_name, scan_result)
+            # Track error type
+            error_type = "timeout_error" if isinstance(scan_result, asyncio.TimeoutError) else "scanner_execution_error"
+            llm_guard_errors_total.labels(
+                error_type=error_type,
+                scanner_category="unknown",
+                scanner_name=scanner_name
+            ).inc()
             return scanner_name, {
                 "sanitized_prompt": default_prompt,
                 "is_valid": False,

@@ -14,6 +14,7 @@ import os
 
 # Third-Party
 import orjson
+from prometheus_client import Counter
 import redis.asyncio as aioredis
 
 # First-Party
@@ -22,6 +23,13 @@ from mcpgateway.services.logging_service import LoggingService
 # Initialize logging service first
 logging_service = LoggingService()
 logger = logging_service.get_logger(__name__)
+
+# Prometheus metrics for error tracking
+llm_guard_cache_errors_total = Counter(
+    "llm_guard_cache_errors_total",
+    "Total number of cache errors by type",
+    labelnames=["error_type", "operation"],
+)
 
 # Initialize redis host and client values
 redis_host = os.getenv("REDIS_HOST", "redis")
@@ -62,6 +70,7 @@ class CacheTTLDict(dict):
         except TypeError as e:
             # Non-JSON types in vault will break deanonymization later
             logger.error("Cache serialization failed for key %s - vault sharing disabled: %s", key, e)
+            llm_guard_cache_errors_total.labels(error_type="serialization_error", operation="update").inc()
             return False, False
         # Log key and size only - serialized_obj may contain PII
         logger.debug("Updating cache for key: %s, size: %d bytes", key, len(serialized_obj))
@@ -97,6 +106,7 @@ class CacheTTLDict(dict):
                 if not isinstance(retrieved_obj, list):
                     # Unexpected shape - treat as cache miss to avoid downstream crash
                     logger.warning("Cache data for key %s has unexpected type %s, treating as miss", key, type(retrieved_obj).__name__)
+                    llm_guard_cache_errors_total.labels(error_type="invalid_type", operation="retrieve").inc()
                     await self.cache.delete(key)
                     return None
                 retrieved_obj = self._convert_to_list_of_tuples(retrieved_obj)
@@ -104,6 +114,7 @@ class CacheTTLDict(dict):
                 return retrieved_obj
             except orjson.JSONDecodeError as e:
                 logger.error("Cache retrieval failed - invalid JSON for id: %s: %s", key, e)
+                llm_guard_cache_errors_total.labels(error_type="json_decode_error", operation="retrieve").inc()
                 # Delete corrupted entry to avoid repeated error logs
                 await self.cache.delete(key)
                 return None
