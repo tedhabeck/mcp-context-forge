@@ -2171,6 +2171,37 @@ def decode_html_entities(value: str) -> str:
 
 jinja_env.filters["decode_html"] = decode_html_entities
 
+
+def tojson_attr(value: object) -> str:
+    """JSON-encode a value for safe use inside double-quoted HTML attributes.
+
+    Unlike the built-in ``|tojson`` filter (which returns ``Markup``, bypassing
+    autoescape), this filter returns a plain ``str``.  Jinja2 autoescape then
+    HTML-encodes the ``"`` characters to ``&quot;``, keeping the enclosing
+    ``"``-delimited HTML attribute intact.  The browser decodes the entities
+    back to ``"`` before passing the value to the JS engine.
+
+    Use ``|tojson_attr`` for inline event handlers (``onclick``, ``onsubmit``).
+    Use the built-in ``|tojson`` for ``<script>`` blocks (where ``Markup`` is fine).
+
+    Args:
+        value: Any JSON-serialisable object.
+
+    Returns:
+        Plain string with JSON content (autoescape will HTML-encode it).
+    """
+    # Standard
+    import json as _json
+
+    s = _json.dumps(value)
+    # Same HTML-safety replacements as Jinja2's htmlsafe_json_dumps,
+    # but we return a plain str so autoescape encodes the remaining `"`.
+    s = s.replace("&", "\\u0026").replace("<", "\\u003c").replace(">", "\\u003e").replace("'", "\\u0027")
+    return s
+
+
+jinja_env.filters["tojson_attr"] = tojson_attr
+
 templates = Jinja2Templates(env=jinja_env)
 if not settings.templates_auto_reload:
     logger.info("🎨 Template auto-reload disabled (production mode)")
@@ -2702,8 +2733,9 @@ async def list_servers(
             status_code=status.HTTP_403_FORBIDDEN,
         )
 
-    # Determine final team ID
-    team_id = team_id or token_team_id
+    # For listing, only narrow by team_id when explicitly requested via query param.
+    # Do NOT auto-narrow to token's single team; token_teams handles visibility scoping
+    # (public + team resources). Auto-narrowing would exclude public servers.
 
     # SECURITY: token_teams is normalized in auth.py:
     # - None: admin bypass (is_admin=true with explicit null teams) - sees ALL resources
@@ -3383,21 +3415,17 @@ async def list_a2a_agents(
         token_teams = []  # Non-admin without teams = public-only (secure default)
 
     # Check team_id from request.state (set during auth)
-    # Only use for non-empty-team tokens; empty-team tokens should rely on visibility filtering
     token_team_id = getattr(request.state, "team_id", None)
-    is_empty_team_token = token_teams is not None and len(token_teams) == 0
 
     # Check for team ID mismatch (only applies when both are specified and token has teams)
-    if team_id is not None and token_team_id is not None and team_id != token_team_id and not is_empty_team_token:
+    if team_id is not None and token_team_id is not None and team_id != token_team_id:
         return ORJSONResponse(
             content={"message": "Access issue: This API token does not have the required permissions for this team."},
             status_code=status.HTTP_403_FORBIDDEN,
         )
 
-    # Determine final team ID - don't use token_team_id for empty-team tokens
-    # Empty-team tokens should filter by public + owned, not by personal team
-    if not is_empty_team_token:
-        team_id = team_id or token_team_id
+    # For listing, only narrow by team_id when explicitly requested via query param.
+    # Do NOT auto-narrow to token's single team; token_teams handles visibility scoping.
 
     logger.debug(f"User: {user_email} requested A2A agent list with team_id={team_id}, visibility={visibility}, tags={tags_list}, cursor={cursor}")
 
@@ -3841,21 +3869,17 @@ async def list_tools(
         token_teams = []  # Non-admin without teams = public-only (secure default)
 
     # Check team_id from request.state (set during auth)
-    # Only use for non-empty-team tokens; empty-team tokens should rely on visibility filtering
     token_team_id = getattr(request.state, "team_id", None)
-    is_empty_team_token = token_teams is not None and len(token_teams) == 0
 
     # Check for team ID mismatch (only applies when both are specified and token has teams)
-    if team_id is not None and token_team_id is not None and team_id != token_team_id and not is_empty_team_token:
+    if team_id is not None and token_team_id is not None and team_id != token_team_id:
         return ORJSONResponse(
             content={"message": "Access issue: This API token does not have the required permissions for this team."},
             status_code=status.HTTP_403_FORBIDDEN,
         )
 
-    # Determine final team ID - don't use token_team_id for empty-team tokens
-    # Empty-team tokens should filter by public + owned, not by personal team
-    if not is_empty_team_token:
-        team_id = team_id or token_team_id
+    # For listing, only narrow by team_id when explicitly requested via query param.
+    # Do NOT auto-narrow to token's single team; token_teams handles visibility scoping.
 
     # Use unified list_tools() with token-based team filtering
     # Always apply visibility filtering based on token scope
@@ -4376,21 +4400,17 @@ async def list_resources(
         token_teams = []  # Non-admin without teams = public-only (secure default)
 
     # Check team_id from request.state (set during auth)
-    # Only use for non-empty-team tokens; empty-team tokens should rely on visibility filtering
     token_team_id = getattr(request.state, "team_id", None)
-    is_empty_team_token = token_teams is not None and len(token_teams) == 0
 
     # Check for team ID mismatch (only applies when both are specified and token has teams)
-    if team_id is not None and token_team_id is not None and team_id != token_team_id and not is_empty_team_token:
+    if team_id is not None and token_team_id is not None and team_id != token_team_id:
         return ORJSONResponse(
             content={"message": "Access issue: This API token does not have the required permissions for this team."},
             status_code=status.HTTP_403_FORBIDDEN,
         )
 
-    # Determine final team ID - don't use token_team_id for empty-team tokens
-    # Empty-team tokens should filter by public + owned, not by personal team
-    if not is_empty_team_token:
-        team_id = team_id or token_team_id
+    # For listing, only narrow by team_id when explicitly requested via query param.
+    # Do NOT auto-narrow to token's single team; token_teams handles visibility scoping.
 
     # Use unified list_resources() with token-based team filtering
     # Always apply visibility filtering based on token scope
@@ -4869,21 +4889,17 @@ async def list_prompts(
         token_teams = []  # Non-admin without teams = public-only (secure default)
 
     # Check team_id from request.state (set during auth)
-    # Only use for non-empty-team tokens; empty-team tokens should rely on visibility filtering
     token_team_id = getattr(request.state, "team_id", None)
-    is_empty_team_token = token_teams is not None and len(token_teams) == 0
 
     # Check for team ID mismatch (only applies when both are specified and token has teams)
-    if team_id is not None and token_team_id is not None and team_id != token_team_id and not is_empty_team_token:
+    if team_id is not None and token_team_id is not None and team_id != token_team_id:
         return ORJSONResponse(
             content={"message": "Access issue: This API token does not have the required permissions for this team."},
             status_code=status.HTTP_403_FORBIDDEN,
         )
 
-    # Determine final team ID - don't use token_team_id for empty-team tokens
-    # Empty-team tokens should filter by public + owned, not by personal team
-    if not is_empty_team_token:
-        team_id = team_id or token_team_id
+    # For listing, only narrow by team_id when explicitly requested via query param.
+    # Do NOT auto-narrow to token's single team; token_teams handles visibility scoping.
 
     # Use consolidated prompt listing with token-based team filtering
     # Always apply visibility filtering based on token scope
@@ -5367,8 +5383,8 @@ async def list_gateways(
             status_code=status.HTTP_403_FORBIDDEN,
         )
 
-    # Determine final team ID
-    team_id = team_id or token_team_id
+    # For listing, only narrow by team_id when explicitly requested via query param.
+    # Do NOT auto-narrow to token's single team; token_teams handles visibility scoping.
 
     # SECURITY: token_teams is normalized in auth.py:
     # - None: admin bypass (is_admin=true with explicit null teams) - sees ALL resources

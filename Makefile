@@ -2546,6 +2546,8 @@ scc-report:
 # =============================================================================
 # help: 📚 DOCUMENTATION & SBOM
 # help: docs                 - Build docs (graphviz + handsdown + images + SBOM)
+# help: docs-assets           - Sync logo/icon SVGs from mcpgateway/static to docs
+# help: docs-serve            - Sync assets and serve docs locally with mkdocs
 # help: images               - Generate architecture & dependency diagrams
 
 # Pick the right "in-place" flag for sed (BSD vs GNU)
@@ -2555,8 +2557,30 @@ else
   SED_INPLACE := -i
 endif
 
+.PHONY: docs-assets
+docs-assets:
+	@echo "🖼️   Syncing logo assets to docs..."
+	@mkdir -p $(DOCS_DIR)/docs/images
+	@cp mcpgateway/static/contextforge-logo_horizontal_color.svg \
+	    mcpgateway/static/contextforge-logo_horizontal_white.svg \
+	    mcpgateway/static/contextforge-logo_horizontal_black.svg \
+	    mcpgateway/static/contextforge-logo_vertical_white.svg \
+	    mcpgateway/static/contextforge-logo_vertical_black.svg \
+	    mcpgateway/static/contextforge-icon_white.svg \
+	    mcpgateway/static/contextforge-icon_black.svg \
+	    $(DOCS_DIR)/docs/images/
+	@echo "✅  Logo assets synced"
+
+.PHONY: docs-serve
+docs-serve: docs-assets
+ifeq ($(shell uname),Darwin)
+	@cd $(DOCS_DIR) && DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib mkdocs serve
+else
+	@cd $(DOCS_DIR) && mkdocs serve
+endif
+
 .PHONY: docs
-docs: images sbom
+docs: docs-assets images sbom
 	@echo "📚  Generating documentation with handsdown..."
 	@test -d "$(VENV_DIR)" || $(MAKE) venv
 	@/bin/bash -c "source $(VENV_DIR)/bin/activate && \
@@ -6483,6 +6507,7 @@ db-fix-head: ## Fix multiple heads issue
 # help: playwright-install-all - Install all Playwright browsers (chromium, firefox, webkit)
 # help: test-ui              - Run Playwright UI tests with visible browser
 # help: test-ui-headless     - Run Playwright UI tests in headless mode
+# help: test-ui-headless-parallel - Run Playwright UI tests headless in parallel (pytest-xdist)
 # help: test-ui-debug        - Run Playwright UI tests with Playwright Inspector
 # help: test-ui-smoke        - Run Playwright UI smoke tests only (fast subset)
 # help: test-ui-ci-smoke     - Run stable Playwright CI smoke subset (headless, serve-compatible)
@@ -6494,7 +6519,7 @@ db-fix-head: ## Fix multiple heads issue
 # help: test-ui-update-snapshots - Update Playwright visual regression snapshots
 # help: test-ui-clean        - Clean up Playwright test artifacts
 
-.PHONY: playwright-install playwright-install-all playwright-preflight test-ui test-ui-headless test-ui-debug test-ui-smoke test-ui-ci-smoke test-ui-parallel test-ui-report test-ui-coverage test-ui-screenshots test-ui-record test-ui-update-snapshots test-ui-clean
+.PHONY: playwright-install playwright-install-all playwright-preflight test-ui test-ui-headless test-ui-headless-parallel test-ui-debug test-ui-smoke test-ui-ci-smoke test-ui-parallel test-ui-report test-ui-coverage test-ui-screenshots test-ui-record test-ui-update-snapshots test-ui-clean
 
 # Playwright test variables
 PLAYWRIGHT_DIR := tests/playwright
@@ -6570,6 +6595,19 @@ test-ui-headless: playwright-install
 		pytest ${PLAYWRIGHT_TEST_TARGET} -v --screenshot=only-on-failure \
 		--browser chromium || { echo '❌ UI tests failed!'; exit 1; }"
 	@echo "✅ UI tests completed!"
+
+test-ui-headless-parallel: playwright-install
+	@echo "🎭 Running Playwright UI tests headless in parallel..."
+	@$(MAKE) --no-print-directory playwright-preflight
+	@test -d "$(VENV_DIR)" || $(MAKE) venv
+	@mkdir -p $(PLAYWRIGHT_SCREENSHOTS) $(PLAYWRIGHT_REPORTS)
+	@/bin/bash -c "source $(VENV_DIR)/bin/activate && \
+		uv pip install -q pytest-xdist && \
+		export TEST_BASE_URL='$(TEST_BASE_URL)' && \
+		pytest ${PLAYWRIGHT_TEST_TARGET} -v -n auto --dist loadscope \
+		--screenshot=only-on-failure \
+		--browser chromium || { echo '❌ UI tests failed!'; exit 1; }"
+	@echo "✅ UI parallel tests completed!"
 
 test-ui-debug: playwright-install
 	@echo "🎭 Running Playwright UI tests with Playwright Inspector..."
