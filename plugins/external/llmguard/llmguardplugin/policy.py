@@ -64,13 +64,13 @@ class GuardrailPolicy:
             # Parse the policy expression into an abstract syntax tree
             tree = ast.parse(policy, mode="eval")
             return self._safe_eval(tree.body, policy_variables)
-        except ValueError as e:
+        except ValueError:
             llm_guard_policy_errors_total.labels(error_type="value_error").inc()
             return "Invalid expression"
-        except SyntaxError as e:
+        except SyntaxError:
             llm_guard_policy_errors_total.labels(error_type="syntax_error").inc()
             return "Invalid expression"
-        except Exception as e:
+        except Exception:
             llm_guard_policy_errors_total.labels(error_type="evaluation_error").inc()
             return "Invalid expression"
 
